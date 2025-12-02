@@ -54,7 +54,7 @@ docker run --name sublinke -p 8000:8000 \
 -v $PWD/db:/app/db \
 -v $PWD/template:/app/template \
 -v $PWD/logs:/app/logs \
--d zerodeng/sublink-pro 
+-d yzcczdyh/sublink-pro 
 ```
 
 ## 一键安装

@@ -30,6 +30,7 @@ interface Node {
   Speed: number;
   LastCheck: string;
   Source: string;
+  DelayTime: number;
 }
 const tableData = ref<Node[]>([]);
 const loading = ref(false);
@@ -44,6 +45,7 @@ const table = ref();
 const NodeTitle = ref("");
 const radio1 = ref("1");
 const groupOptions = ref<string[]>([]);
+const sourceOptions = ref<string[]>([]);
 
 // 订阅相关变量
 const subSchedulerData = ref<SubScheduler[]>([]);
@@ -87,12 +89,17 @@ async function getnodes() {
     tableData.value = data;
     // 提取所有已存在的分组
     const groups = new Set<string>();
+    const sources = new Set<string>();
     data.forEach((node: Node) => {
       if (node.Group && node.Group.trim() !== "") {
         groups.add(node.Group);
       }
+      if (node.Source && node.Source.trim() !== "") {
+        sources.add(node.Source);
+      }
     });
     groupOptions.value = Array.from(groups).sort();
+    sourceOptions.value = Array.from(sources).sort();
   } catch (error) {
     console.error("获取节点列表失败:", error);
   } finally {
@@ -176,6 +183,8 @@ const handleSelectionChange = (val: Node[]) => {
 const searchQuery = ref("");
 const searchSourceQuery = ref("");
 const groupSearchQuery = ref("");
+const searchDelayQuery = ref<number | undefined>(undefined);
+const searchSpeedQuery = ref<number | undefined>(undefined);
 const handleSearch = () => {
   // filteredTableData 是计算属性，会自动更新
 };
@@ -184,6 +193,8 @@ const resetSearch = () => {
   searchQuery.value = "";
   searchSourceQuery.value = "";
   groupSearchQuery.value = "";
+  searchDelayQuery.value = undefined;
+  searchSpeedQuery.value = undefined;
 };
 
 // 搜索分组选项
@@ -218,6 +229,18 @@ const filteredTableData = computed(() => {
         node.Source.toLowerCase().includes(sourceQuery)
       );
     }
+  }
+
+  // 按延迟过滤 (<= 指定值)
+  if (searchDelayQuery.value !== undefined && searchDelayQuery.value !== null) {
+    result = result.filter(
+      (node) => node.DelayTime > 0 && node.DelayTime <= searchDelayQuery.value!
+    );
+  }
+
+  // 按速度过滤 (> 指定值)
+  if (searchSpeedQuery.value !== undefined && searchSpeedQuery.value !== null) {
+    result = result.filter((node) => node.Speed > searchSpeedQuery.value!);
   }
 
   // 再按节点内容过滤
@@ -796,6 +819,32 @@ const handleRunSpeedTest = async () => {
   }
 };
 
+const handleSingleSpeedTest = async (row: Node) => {
+  try {
+    await runSpeedTest([row.ID]);
+    ElMessage.success(`节点 ${row.Name} 测速任务已启动`);
+  } catch (error) {
+    console.error("启动测速任务失败:", error);
+    ElMessage.error("启动测速任务失败");
+  }
+};
+
+const handleBatchSpeedTest = async () => {
+  if (multipleSelection.value.length === 0) {
+    ElMessage.warning("请选择要测速的节点");
+    return;
+  }
+
+  const ids = multipleSelection.value.map((node) => node.ID);
+  try {
+    await runSpeedTest(ids);
+    ElMessage.success(`已启动 ${ids.length} 个节点的测速任务`);
+  } catch (error) {
+    console.error("启动批量测速任务失败:", error);
+    ElMessage.error("启动批量测速任务失败");
+  }
+};
+
 // Cron表达式选项
 const cronOptions = [
   { label: "每小时 (0 * * * *)", value: "0 * * * *" },
@@ -851,6 +900,15 @@ const currentSpeedTestUrlOptions = computed(() => {
   }
   return speedTest204Options;
 });
+
+const handleSpeedModeChange = (val: string | number | boolean | undefined) => {
+  if (val === "mihomo") {
+    speedTestForm.value.url = speedTestDownloadOptions[0].value;
+  } else {
+    speedTestForm.value.url = speedTest204Options[0].value;
+  }
+};
+
 </script>
 
 <template>
@@ -932,16 +990,41 @@ const currentSpeedTestUrlOptions = computed(() => {
                 <el-icon><Search /></el-icon>
               </template>
             </el-input>
-            <el-input
+            <el-select
               v-model="searchSourceQuery"
               placeholder="搜索来源"
+              style="width: 160px"
+              clearable
+              filterable
+              @change="handleSearch"
+            >
+              <el-option label="手动添加" value="手动添加" />
+              <el-option
+                v-for="source in sourceOptions"
+                :key="source"
+                :label="source === 'manual' ? '手动添加' : source"
+                :value="source"
+              />
+            </el-select>
+            <el-input
+              v-model.number="searchDelayQuery"
+              placeholder="最大延迟"
               style="width: 200px"
               clearable
+              type="number"
               @input="handleSearch"
             >
-              <template #prefix>
-                <el-icon><Search /></el-icon>
-              </template>
+              <template #append> ms </template>
+            </el-input>
+            <el-input
+              v-model.number="searchSpeedQuery"
+              placeholder="最低速度"
+              style="width: 200px"
+              clearable
+              type="number"
+              @input="handleSearch"
+            >
+              <template #append> MB/s </template>
             </el-input>
             <el-button @click="resetSearch">重置</el-button>
           </div>
@@ -954,6 +1037,9 @@ const currentSpeedTestUrlOptions = computed(() => {
             >
             <el-button type="info" @click="handleSpeedTestSettings"
               >测速设置</el-button
+            >
+            <el-button type="primary" @click="handleBatchSpeedTest"
+              >批量测速</el-button
             >
             <el-button type="success" :icon="Refresh" @click="getnodes"
               >刷新</el-button
@@ -1075,7 +1161,13 @@ const currentSpeedTestUrlOptions = computed(() => {
             }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="DelayTime" label="延迟" width="120" sortable fixed="right">
+        <el-table-column
+          prop="DelayTime"
+          label="延迟"
+          width="120"
+          sortable
+          fixed="right"
+        >
           <template #default="scope">
             <el-tag
               v-if="scope.row.DelayTime > 0"
@@ -1105,13 +1197,15 @@ const currentSpeedTestUrlOptions = computed(() => {
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="Speed" label="速度" width="120" sortable fixed="right">
+        <el-table-column
+          prop="Speed"
+          label="速度"
+          width="120"
+          sortable
+          fixed="right"
+        >
           <template #default="scope">
-            <el-tag
-              v-if="scope.row.Speed > 0"
-              type="success"
-              effect="plain"
-            >
+            <el-tag v-if="scope.row.Speed > 0" type="success" effect="plain">
               {{ scope.row.Speed.toFixed(2) }}MB/s
             </el-tag>
             <span v-else style="color: #c0c4cc">-</span>
@@ -1125,6 +1219,13 @@ const currentSpeedTestUrlOptions = computed(() => {
               size="small"
               @click="copyInfo(scope.row)"
               >复制</el-button
+            >
+            <el-button
+              link
+              type="warning"
+              size="small"
+              @click="handleSingleSpeedTest(scope.row)"
+              >测速</el-button
             >
             <el-button
               link
@@ -1443,7 +1544,10 @@ const currentSpeedTestUrlOptions = computed(() => {
           />
         </el-form-item>
         <el-form-item label="测速模式">
-          <el-radio-group v-model="speedTestForm.mode">
+          <el-radio-group
+            v-model="speedTestForm.mode"
+            @change="handleSpeedModeChange"
+          >
             <el-radio label="tcp" value="tcp">仅延迟测试</el-radio>
             <el-radio label="mihomo" value="mihomo">真速度测试</el-radio>
           </el-radio-group>

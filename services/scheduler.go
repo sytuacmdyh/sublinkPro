@@ -1,11 +1,13 @@
 package services
 
 import (
+	"fmt"
 	"log"
 	"regexp"
 	"strings"
 	"sublink/models"
 	"sublink/node"
+	"sublink/services/sse"
 	"sync"
 	"time"
 
@@ -202,7 +204,30 @@ func (sm *SchedulerManager) UpdateJob(schedulerID int, cronExpr string, enabled 
 func ExecuteSubscriptionTask(id int, url string, subName string) {
 
 	log.Printf("执行自动获取订阅任务 - ID: %d, Name: %s, URL: %s", id, subName, url)
-	node.LoadClashConfigFromURL(id, url, subName)
+	err := node.LoadClashConfigFromURL(id, url, subName)
+	if err != nil {
+		sse.GetSSEBroker().BroadcastEvent("task_update", sse.NotificationPayload{
+			Event:   "sub_update",
+			Title:   "订阅更新失败",
+			Message: fmt.Sprintf("订阅 [%s] 更新失败: %v", subName, err),
+			Data: map[string]interface{}{
+				"id":     id,
+				"name":   subName,
+				"status": "error",
+			},
+		})
+	} else {
+		sse.GetSSEBroker().BroadcastEvent("task_update", sse.NotificationPayload{
+			Event:   "sub_update",
+			Title:   "订阅更新成功",
+			Message: fmt.Sprintf("订阅 [%s] 更新成功", subName),
+			Data: map[string]interface{}{
+				"id":     id,
+				"name":   subName,
+				"status": "success",
+			},
+		})
+	}
 }
 
 // cleanCronExpression 清理Cron表达式中的多余空格
@@ -318,65 +343,147 @@ func ExecuteNodeSpeedTestTask() {
 		return
 	}
 
-	// 获取测速配置
-	speedTestMode, _ := models.GetSetting("speed_test_mode")
-	speedTestURL, _ := models.GetSetting("speed_test_url")
-	speedTestTimeoutStr, _ := models.GetSetting("speed_test_timeout")
+	RunSpeedTestOnNodes(nodes)
+}
 
-	timeout := 5 * time.Second
-	if speedTestTimeoutStr != "" {
-		if t, err := time.ParseDuration(speedTestTimeoutStr + "s"); err == nil {
-			timeout = t
+// ExecuteSpecificNodeSpeedTestTask 执行指定节点测速任务
+func ExecuteSpecificNodeSpeedTestTask(nodeIDs []int) {
+	log.Printf("开始执行指定节点测速任务: %v", nodeIDs)
+	if len(nodeIDs) == 0 {
+		return
+	}
+
+	// 获取指定节点
+	var nodes []models.Node
+	for _, id := range nodeIDs {
+		var n models.Node
+		n.ID = id
+		if err := n.GetByID(); err == nil {
+			nodes = append(nodes, n)
 		}
 	}
 
+	if len(nodes) == 0 {
+		log.Println("未找到指定节点")
+		return
+	}
+
+	RunSpeedTestOnNodes(nodes)
+}
+
+// RunSpeedTestOnNodes 对指定节点列表执行测速
+func RunSpeedTestOnNodes(nodes []models.Node) {
+	log.Printf("开始执行节点测速，总节点数: %d", len(nodes))
+
+	// 确保函数最后一定会执行日志和通知
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("测速任务执行过程中发生严重错误: %v", r)
+			sse.GetSSEBroker().BroadcastEvent("task_update", sse.NotificationPayload{
+				Event:   "speed_test",
+				Title:   "测速任务异常",
+				Message: fmt.Sprintf("测速任务执行异常: %v", r),
+				Data: map[string]interface{}{
+					"status": "error",
+				},
+			})
+		}
+	}()
+
+	// 获取测速配置
+	speedTestUrl, _ := models.GetSetting("speed_test_url")
+	speedTestTimeoutStr, _ := models.GetSetting("speed_test_timeout")
+	speedTestTimeout := 5 * time.Second
+	if speedTestTimeoutStr != "" {
+		if d, err := time.ParseDuration(speedTestTimeoutStr + "s"); err == nil {
+			speedTestTimeout = d
+		}
+	}
+
+	// 获取测速模式
+	speedTestMode, _ := models.GetSetting("speed_test_mode")
+
+	// 并发控制
+	concurrency := 10 // 默认并发数
+	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
-	// 限制并发数，避免同时发起过多连接
-	sem := make(chan struct{}, 10)
 
-	for i := range nodes {
-		wg.Add(1)
-		go func(n *models.Node) {
-			defer wg.Done()
-			sem <- struct{}{}        // 获取信号量
-			defer func() { <-sem }() // 释放信号量
+	// 结果统计
+	var successCount, failCount int32
+	var mu sync.Mutex
 
-			if speedTestMode == "mihomo" {
-				// Mihomo 真速度测速
-				log.Printf("开始真速度测速节点: %s", n.Name)
-				speed, latency, err := MihomoSpeedTest(n.Link, speedTestURL, timeout)
-				if err != nil {
-					n.Speed = 0
-					n.DelayTime = -1
-					log.Printf("节点真速度测速失败: %s, Error: %v", n.Name, err)
+	// 总体超时控制
+	// overallTimeout := time.Duration(len(nodes)) * speedTestTimeout / time.Duration(concurrency) * 2
+	// if overallTimeout < 30*time.Second {
+	// 	overallTimeout = 30 * time.Second
+	// }
+	done := make(chan struct{})
+
+	go func() {
+		for _, node := range nodes {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(n models.Node) {
+				defer wg.Done()
+				defer func() { <-sem }()
+
+				var speed float64
+				var latency int
+				var err error
+
+				if speedTestMode == "tcp" {
+					// 仅测试延迟
+					latency, err = MihomoDelay(n.Link, speedTestUrl, speedTestTimeout)
+					speed = 0
 				} else {
+					// 测试延迟和速度 (默认 mihomo)
+					speed, latency, err = MihomoSpeedTest(n.Link, speedTestUrl, speedTestTimeout)
+				}
+
+				mu.Lock()
+				defer mu.Unlock()
+
+				if err != nil {
+					failCount++
+					log.Printf("节点 [%s] 测速失败: %v", n.Name, err)
+					speed = -1
+					latency = -1
+					// 更新节点状态为失败
 					n.Speed = speed
 					n.DelayTime = latency
-					log.Printf("节点测速完成: %s, 速度: %.2fMB/s, 延迟: %dms", n.Name, speed, latency)
-				}
-			} else {
-				// TCP Ping 模式 (改为使用 Mihomo Adapter 的 Connect Latency，即 0-RTT/握手延迟)
-				// 这种方式支持所有协议 (VMess, Hysteria2 等)，并且更准确
-				log.Printf("开始测速节点 (Connect Latency): %s", n.Name)
-
-				// 使用 MihomoDelay 进行测速
-				// 如果 speedTestURL 为空，MihomoDelay 会使用默认的 generate_204 URL
-				latency, err := MihomoDelay(n.Link, speedTestURL, timeout)
-				if err != nil {
-					// 测速失败
-					n.DelayTime = -1
-					n.Speed = 0
-					log.Printf("节点测速失败: %s, Error: %v", n.Name, err)
+					n.LastCheck = time.Now().Format("2006-01-02 15:04:05")
+					if err := n.UpdateSpeed(); err != nil {
+						log.Printf("更新节点 %s 测速结果失败: %v", n.Name, err)
+					}
 				} else {
+					successCount++
+					log.Printf("节点 [%s] 测速成功: 速度 %.2f MB/s, 延迟 %d ms", n.Name, speed, latency)
+					// 更新节点测速结果
+					n.Speed = speed
 					n.DelayTime = latency
-					n.Speed = 0
-					log.Printf("节点测速完成: %s, 延迟: %dms", n.Name, latency)
+					n.LastCheck = time.Now().Format("2006-01-02 15:04:05")
+					if err := n.UpdateSpeed(); err != nil {
+						log.Printf("更新节点 %s 测速结果失败: %v", n.Name, err)
+					}
 				}
-			}
-			n.LastCheck = time.Now().Format("2006-01-02 15:04:05")
-			n.UpdateSpeed()
-		}(&nodes[i])
-	}
-	wg.Wait()
-	log.Println("节点测速任务执行完成")
+			}(node)
+		}
+		wg.Wait()
+		close(done)
+	}()
+
+	<-done
+	// 完成
+	log.Printf("节点测速任务执行完成 - 成功: %d, 失败: %d", successCount, failCount)
+	sse.GetSSEBroker().BroadcastEvent("task_update", sse.NotificationPayload{
+		Event:   "speed_test",
+		Title:   "节点测速完成",
+		Message: fmt.Sprintf("节点测速完成 (成功: %d, 失败: %d)", successCount, failCount),
+		Data: map[string]interface{}{
+			"status":  "success",
+			"success": successCount,
+			"fail":    failCount,
+			"total":   len(nodes),
+		},
+	})
 }

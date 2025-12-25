@@ -423,8 +423,7 @@ func scheduleClashToNodeLinks(id int, proxys []protocol.Proxy, subName string, r
 		var Node models.Node
 		var link string
 		//var systemNodeName = subName + "_" + strings.TrimSpace(proxy.Name) //系统节点名称
-		// proxy.Name = strings.TrimSpace(proxy.Name) // 某些机场的节点名称可能包含空格
-		proxy.Name = subName + "_" + strings.TrimSpace(proxy.Name) // 某些机场的节点名称可能包含空格
+		proxy.Name = strings.TrimSpace(proxy.Name) // 某些机场的节点名称可能包含空格
 		proxy.Server = utils.WrapIPv6Host(proxy.Server)
 		switch strings.ToLower(proxy.Type) {
 		case "ss":

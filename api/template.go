@@ -2,19 +2,26 @@ package api
 
 import (
 	"errors"
-	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sublink/cache"
+	"sublink/models"
 	"sublink/utils"
 
 	"github.com/gin-gonic/gin"
 )
 
 type Temp struct {
-	File       string `json:"file"`
-	Text       string `json:"text"`
-	CreateDate string `json:"create_date"`
+	File             string `json:"file"`
+	Text             string `json:"text"`
+	Category         string `json:"category"`
+	RuleSource       string `json:"ruleSource"`
+	UseProxy         bool   `json:"useProxy"`
+	ProxyLink        string `json:"proxyLink"`
+	EnableIncludeAll bool   `json:"enableIncludeAll"`
+	CreateDate       string `json:"create_date"`
 }
 
 // 定义允许操作的基础目录
@@ -27,24 +34,24 @@ func init() {
 	// 当您在项目根目录运行 `go run main.go` 时，这将是项目根目录
 	cwd, err := os.Getwd()
 	if err != nil {
-		log.Fatalf("无法获取当前工作目录: %v", err)
+		utils.Fatal("无法获取当前工作目录: %v", err)
 	}
 
 	// 将 "template" 路径解析为相对于当前工作目录的绝对路径
 	absPath, err := filepath.Abs(filepath.Join(cwd, "template"))
 	if err != nil {
-		log.Fatalf("无法解析 template 目录的绝对路径: %v", err)
+		utils.Fatal("无法解析 template 目录的绝对路径: %v", err)
 	}
 	baseTemplateDir = absPath
-	log.Printf("基础模板目录已初始化为: %s (基于当前工作目录)", baseTemplateDir)
+	utils.Info("基础模板目录已初始化为: %s (基于当前工作目录)", baseTemplateDir)
 	// === 修改点结束 ===
 
 	// 确保基础模板目录存在，如果不存在则创建
 	if _, err := os.Stat(baseTemplateDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(baseTemplateDir, 0755); err != nil {
-			log.Fatalf("无法创建基础模板目录 %s: %v", baseTemplateDir, err)
+			utils.Fatal("无法创建基础模板目录 %s: %v", baseTemplateDir, err)
 		}
-		log.Printf("已创建基础模板目录: %s", baseTemplateDir)
+		utils.Info("已创建基础模板目录: %s", baseTemplateDir)
 	}
 }
 
@@ -98,7 +105,7 @@ func GetTempS(c *gin.Context) {
 	// 由于 init() 函数已经确保了 baseTemplateDir 的存在，这里无需再次检查和创建。
 	files, err := os.ReadDir(baseTemplateDir)
 	if err != nil {
-		log.Printf("读取模板目录失败: %v", err)
+		utils.Error("读取模板目录失败: %v", err)
 		utils.FailWithMsg(c, "服务器错误：无法读取模板文件")
 		return
 	}
@@ -114,32 +121,106 @@ func GetTempS(c *gin.Context) {
 		// 这可以防止通过符号链接（symlink）进行的目录遍历，从而避免信息泄露。
 		fullPathToRead, err := safeFilePath(file.Name())
 		if err != nil {
-			log.Printf("跳过不安全或非法文件 (读取): %s, 错误: %v", file.Name(), err)
+			utils.Warn("跳过不安全或非法文件 (读取): %s, 错误: %v", file.Name(), err)
 			continue // 跳过不安全的文件
 		}
 
 		info, err := file.Info()
 		if err != nil {
-			log.Printf("获取文件信息失败: %s, 错误: %v", file.Name(), err)
+			utils.Warn("获取文件信息失败: %s, 错误: %v", file.Name(), err)
 			continue
 		}
 		modTime := info.ModTime().Format("2006-01-02 15:04:05")
 
-		// 使用经过安全验证的完整路径来读取文件内容
-		text, err := os.ReadFile(fullPathToRead)
-		if err != nil {
-			log.Printf("读取文件内容失败: %s, 错误: %v", fullPathToRead, err)
-			continue // 跳过无法读取的文件
+		// 优先从缓存读取模板内容
+		var textContent string
+		if cached, ok := cache.GetTemplateContent(file.Name()); ok {
+			textContent = cached
+		} else {
+			// 缓存未命中，从文件读取并写入缓存
+			textBytes, readErr := os.ReadFile(fullPathToRead)
+			if readErr != nil {
+				utils.Error("读取文件内容失败: %s, 错误: %v", fullPathToRead, readErr)
+				continue // 跳过无法读取的文件
+			}
+			textContent = string(textBytes)
+			// 写入缓存
+			cache.SetTemplateContent(file.Name(), textContent)
+		}
+
+		// 从数据库获取模板元数据
+		var tmplMeta models.Template
+		category := "clash"
+		ruleSource := ""
+		useProxy := false
+		proxyLink := ""
+		enableIncludeAll := false
+		if err := tmplMeta.FindByName(file.Name()); err == nil {
+			category = tmplMeta.Category
+			ruleSource = tmplMeta.RuleSource
+			useProxy = tmplMeta.UseProxy
+			proxyLink = tmplMeta.ProxyLink
+			enableIncludeAll = tmplMeta.EnableIncludeAll
 		}
 
 		temp := Temp{
-			File:       file.Name(),
-			Text:       string(text),
-			CreateDate: modTime,
+			File:             file.Name(),
+			Text:             textContent,
+			Category:         category,
+			RuleSource:       ruleSource,
+			UseProxy:         useProxy,
+			ProxyLink:        proxyLink,
+			EnableIncludeAll: enableIncludeAll,
+			CreateDate:       modTime,
 		}
 		temps = append(temps, temp)
 	}
 
+	// 解析分页参数
+	page := 0
+	pageSize := 0
+	if pageStr := c.Query("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+	if pageSizeStr := c.Query("pageSize"); pageSizeStr != "" {
+		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 {
+			pageSize = ps
+		}
+	}
+
+	// 如果提供了分页参数，返回分页响应
+	if page > 0 && pageSize > 0 {
+		total := int64(len(temps))
+		offset := (page - 1) * pageSize
+		end := offset + pageSize
+
+		var pagedTemps []Temp
+		if offset < len(temps) {
+			if end > len(temps) {
+				end = len(temps)
+			}
+			pagedTemps = temps[offset:end]
+		} else {
+			pagedTemps = []Temp{}
+		}
+
+		totalPages := 0
+		if pageSize > 0 {
+			totalPages = int((total + int64(pageSize) - 1) / int64(pageSize))
+		}
+		utils.OkDetailed(c, "ok", gin.H{
+			"items":      pagedTemps,
+			"total":      total,
+			"page":       page,
+			"pageSize":   pageSize,
+			"totalPages": totalPages,
+		})
+		return
+	}
+
+	// 不带分页参数，返回全部（向后兼容）
 	if len(temps) == 0 {
 		utils.OkDetailed(c, "ok", []Temp{})
 		return
@@ -150,10 +231,20 @@ func UpdateTemp(c *gin.Context) {
 	filename := c.PostForm("filename")
 	oldname := c.PostForm("oldname")
 	text := c.PostForm("text")
+	category := c.PostForm("category")
+	ruleSource := c.PostForm("ruleSource")
+	useProxy := c.PostForm("useProxy") == "true"
+	proxyLink := c.PostForm("proxyLink")
+	enableIncludeAll := c.PostForm("enableIncludeAll") == "true"
 
 	if filename == "" || oldname == "" || text == "" {
 		utils.FailWithMsg(c, "文件名或内容不能为空")
 		return
+	}
+
+	// 默认类别为 clash
+	if category == "" {
+		category = "clash"
 	}
 
 	// 验证旧文件名以防止目录遍历
@@ -175,7 +266,7 @@ func UpdateTemp(c *gin.Context) {
 		utils.FailWithMsg(c, "旧文件不存在")
 		return
 	} else if err != nil {
-		log.Println("检查旧文件存在性失败:", err)
+		utils.Error("检查旧文件存在性失败: %v", err)
 		utils.FailWithMsg(c, "服务器错误：检查旧文件失败")
 		return
 	}
@@ -186,7 +277,7 @@ func UpdateTemp(c *gin.Context) {
 			utils.FailWithMsg(c, "新文件名已存在，请选择其他名称")
 			return
 		} else if !os.IsNotExist(err) {
-			log.Println("检查新文件存在性失败:", err)
+			utils.Error("检查新文件存在性失败: %v", err)
 			utils.FailWithMsg(c, "服务器错误：检查新文件失败")
 			return
 		}
@@ -196,18 +287,53 @@ func UpdateTemp(c *gin.Context) {
 	if oldFullPath != newFullPath {
 		err = os.Rename(oldFullPath, newFullPath)
 		if err != nil {
-			log.Println("文件改名失败:", err)
+			utils.Error("文件改名失败: %v", err)
 			utils.FailWithMsg(c, "改名失败")
 			return
 		}
 	}
 
 	// 写入文件内容到新的安全路径
-	err = os.WriteFile(newFullPath, []byte(text), 0666) // 确保写入到新的安全路径
+	err = os.WriteFile(newFullPath, []byte(text), 0666)
 	if err != nil {
-		log.Println("修改文件内容失败:", err)
+		utils.Error("修改文件内容失败: %v", err)
 		utils.FailWithMsg(c, "修改失败")
 		return
+	}
+
+	// 同步更新模板内容缓存
+	if oldname != filename {
+		// 文件名变更，先删除旧缓存
+		cache.InvalidateTemplateContent(oldname)
+	}
+	cache.SetTemplateContent(filename, text)
+
+	// 更新数据库中的模板元数据
+	var tmpl models.Template
+	if err := tmpl.FindByName(oldname); err != nil {
+		// 如果数据库中不存在，创建新记录
+		tmpl = models.Template{
+			Name:             filename,
+			Category:         category,
+			RuleSource:       ruleSource,
+			UseProxy:         useProxy,
+			ProxyLink:        proxyLink,
+			EnableIncludeAll: enableIncludeAll,
+		}
+		if err := tmpl.Add(); err != nil {
+			utils.Error("创建模板元数据失败: %v", err)
+		}
+	} else {
+		// 更新现有记录
+		tmpl.Name = filename
+		tmpl.Category = category
+		tmpl.RuleSource = ruleSource
+		tmpl.UseProxy = useProxy
+		tmpl.ProxyLink = proxyLink
+		tmpl.EnableIncludeAll = enableIncludeAll
+		if err := tmpl.Update(); err != nil {
+			utils.Error("更新模板元数据失败: %v", err)
+		}
 	}
 
 	utils.OkWithMsg(c, "修改成功")
@@ -215,16 +341,26 @@ func UpdateTemp(c *gin.Context) {
 func AddTemp(c *gin.Context) {
 	filename := c.PostForm("filename")
 	text := c.PostForm("text")
+	category := c.PostForm("category")
+	ruleSource := c.PostForm("ruleSource")
+	useProxy := c.PostForm("useProxy") == "true"
+	proxyLink := c.PostForm("proxyLink")
+	enableIncludeAll := c.PostForm("enableIncludeAll") == "true"
 
 	if filename == "" || text == "" {
 		utils.FailWithMsg(c, "文件名或内容不能为空")
 		return
 	}
 
+	// 默认类别为 clash
+	if category == "" {
+		category = "clash"
+	}
+
 	// 确保模板目录存在
 	if _, err := os.Stat(baseTemplateDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(baseTemplateDir, 0755); err != nil {
-			log.Println("创建模板目录失败:", err)
+			utils.Error("创建模板目录失败: %v", err)
 			utils.FailWithMsg(c, "服务器错误：无法创建模板目录")
 			return
 		}
@@ -242,8 +378,7 @@ func AddTemp(c *gin.Context) {
 		utils.FailWithMsg(c, "文件已存在")
 		return
 	} else if !os.IsNotExist(err) {
-		// 除了文件不存在的错误，其他都是内部错误
-		log.Println("检查文件存在性失败:", err)
+		utils.Error("检查文件存在性失败: %v", err)
 		utils.FailWithMsg(c, "服务器错误：检查文件失败")
 		return
 	}
@@ -251,9 +386,25 @@ func AddTemp(c *gin.Context) {
 	// 写入文件
 	err = os.WriteFile(fullPath, []byte(text), 0666)
 	if err != nil {
-		log.Println("写入文件失败:", err)
+		utils.Error("写入文件失败: %v", err)
 		utils.FailWithMsg(c, "上传失败")
 		return
+	}
+
+	// 写入模板内容缓存
+	cache.SetTemplateContent(filename, text)
+
+	// 创建数据库记录
+	tmpl := models.Template{
+		Name:             filename,
+		Category:         category,
+		RuleSource:       ruleSource,
+		UseProxy:         useProxy,
+		ProxyLink:        proxyLink,
+		EnableIncludeAll: enableIncludeAll,
+	}
+	if err := tmpl.Add(); err != nil {
+		utils.Error("创建模板元数据失败: %v", err)
 	}
 
 	utils.OkWithMsg(c, "上传成功")
@@ -279,7 +430,7 @@ func DelTemp(c *gin.Context) {
 		utils.FailWithMsg(c, "文件不存在")
 		return
 	} else if err != nil {
-		log.Println("检查文件存在性失败:", err)
+		utils.Error("检查文件存在性失败: %v", err)
 		utils.FailWithMsg(c, "服务器错误：检查文件失败")
 		return
 	}
@@ -287,10 +438,205 @@ func DelTemp(c *gin.Context) {
 	// 删除文件
 	err = os.Remove(fullPath)
 	if err != nil {
-		log.Println("删除文件失败:", err)
+		utils.Error("删除文件失败: %v", err)
 		utils.FailWithMsg(c, "删除失败")
 		return
 	}
 
+	// 清除模板内容缓存
+	cache.InvalidateTemplateContent(filename)
+
+	// 删除数据库记录
+	var tmpl models.Template
+	if err := tmpl.FindByName(filename); err == nil {
+		if err := tmpl.Delete(); err != nil {
+			utils.Error("删除模板元数据失败: %v", err)
+		}
+	}
+
 	utils.OkWithMsg(c, "删除成功")
+}
+
+// ACL4SSRPreset ACL4SSR 规则预设
+type ACL4SSRPreset struct {
+	Name  string `json:"name"`
+	URL   string `json:"url"`
+	Label string `json:"label"`
+}
+
+// GetACL4SSRPresets 获取 ACL4SSR 规则预设列表
+func GetACL4SSRPresets(c *gin.Context) {
+	presets := []ACL4SSRPreset{
+		{
+			Name:  "作者自用",
+			URL:   "https://raw.githubusercontent.com/ZeroDeng01/ACL4SSR/master/Clash/config/ACL4SSR_Online_Full_NoCountry.ini",
+			Label: "作者自用 - 不区分国家",
+		},
+		{
+			Name:  "ACL4SSR",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR.ini",
+			Label: "标准版 - 典型分组",
+		},
+		{
+			Name:  "ACL4SSR_AdblockPlus",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_AdblockPlus.ini",
+			Label: "标准版 - 典型分组+去广告",
+		},
+		{
+			Name:  "ACL4SSR_BackCN",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_BackCN.ini",
+			Label: "回国版 - 回国专用",
+		},
+		{
+			Name:  "ACL4SSR_Mini",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Mini.ini",
+			Label: "精简版 - 少量分组",
+		},
+		{
+			Name:  "ACL4SSR_Mini_Fallback",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Mini_Fallback.ini",
+			Label: "精简版 - 故障转移",
+		},
+		{
+			Name:  "ACL4SSR_Mini_MultiMode",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Mini_MultiMode.ini",
+			Label: "精简版 - 多模式 (自动/手动)",
+		},
+		{
+			Name:  "ACL4SSR_Mini_NoAuto",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Mini_NoAuto.ini",
+			Label: "精简版 - 无自动测速",
+		},
+		{
+			Name:  "ACL4SSR_NoApple",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_NoApple.ini",
+			Label: "无苹果 - 无苹果分流",
+		},
+		{
+			Name:  "ACL4SSR_NoAuto",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_NoAuto.ini",
+			Label: "无测速 - 无自动测速",
+		},
+		{
+			Name:  "ACL4SSR_NoAuto_NoApple",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_NoAuto_NoApple.ini",
+			Label: "无测速&苹果 - 无测速&无苹果分流",
+		},
+		{
+			Name:  "ACL4SSR_NoAuto_NoApple_NoMicrosoft",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_NoAuto_NoApple_NoMicrosoft.ini",
+			Label: "无测速&苹果&微软 - 无测速&无苹果&无微软分流",
+		},
+		{
+			Name:  "ACL4SSR_NoMicrosoft",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_NoMicrosoft.ini",
+			Label: "无微软 - 无微软分流",
+		},
+		{
+			Name:  "ACL4SSR_Online",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online.ini",
+			Label: "在线版 - 典型分组",
+		},
+		{
+			Name:  "ACL4SSR_Online_AdblockPlus",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_AdblockPlus.ini",
+			Label: "在线版 - 典型分组+去广告",
+		},
+		{
+			Name:  "ACL4SSR_Online_Full",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Full.ini",
+			Label: "在线全分组 - 比较全",
+		},
+		{
+			Name:  "ACL4SSR_Online_Full_AdblockPlus",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Full_AdblockPlus.ini",
+			Label: "在线全分组 - 带广告拦截",
+		},
+		{
+			Name:  "ACL4SSR_Online_Full_Google",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Full_Google.ini",
+			Label: "在线全分组 - 谷歌分流",
+		},
+		{
+			Name:  "ACL4SSR_Online_Full_MultiMode",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Full_MultiMode.ini",
+			Label: "在线全分组 - 多模式",
+		},
+		{
+			Name:  "ACL4SSR_Online_Full_Netflix",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Full_Netflix.ini",
+			Label: "在线全分组 - 奈飞分流",
+		},
+		{
+			Name:  "ACL4SSR_Online_Full_NoAuto",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Full_NoAuto.ini",
+			Label: "在线全分组 - 无自动测速",
+		},
+		{
+			Name:  "ACL4SSR_Online_Mini",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini.ini",
+			Label: "在线精简版 - 少量分组",
+		},
+		{
+			Name:  "ACL4SSR_Online_Mini_AdblockPlus",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini_AdblockPlus.ini",
+			Label: "在线精简版 - 带广告拦截",
+		},
+		{
+			Name:  "ACL4SSR_Online_Mini_Ai",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini_Ai.ini",
+			Label: "在线精简版 - AI",
+		},
+		{
+			Name:  "ACL4SSR_Online_Mini_Fallback",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini_Fallback.ini",
+			Label: "在线精简版 - 故障转移",
+		},
+		{
+			Name:  "ACL4SSR_Online_Mini_MultiCountry",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini_MultiCountry.ini",
+			Label: "在线精简版 - 多国家",
+		},
+		{
+			Name:  "ACL4SSR_Online_Mini_MultiMode",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini_MultiMode.ini",
+			Label: "在线精简版 - 多模式",
+		},
+		{
+			Name:  "ACL4SSR_Online_Mini_NoAuto",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini_NoAuto.ini",
+			Label: "在线精简版 - 无自动测速",
+		},
+		{
+			Name:  "ACL4SSR_Online_MultiCountry",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_MultiCountry.ini",
+			Label: "在线版 - 多国家",
+		},
+		{
+			Name:  "ACL4SSR_Online_NoAuto",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_NoAuto.ini",
+			Label: "在线版 - 无自动测速",
+		},
+		{
+			Name:  "ACL4SSR_Online_NoReject",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_NoReject.ini",
+			Label: "在线版 - 无拒绝规则",
+		},
+		{
+			Name:  "ACL4SSR_WithChinaIp",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_WithChinaIp.ini",
+			Label: "特殊版 - 包含回国IP",
+		},
+		{
+			Name:  "ACL4SSR_WithChinaIp_WithGFW",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_WithChinaIp_WithGFW.ini",
+			Label: "特殊版 - 包含回国IP&GFW列表",
+		},
+		{
+			Name:  "ACL4SSR_WithGFW",
+			URL:   "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_WithGFW.ini",
+			Label: "特殊版 - 包含GFW列表",
+		},
+	}
+	utils.OkDetailed(c, "ok", presets)
 }

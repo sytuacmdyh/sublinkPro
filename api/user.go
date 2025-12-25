@@ -1,7 +1,7 @@
 package api
 
 import (
-	"log"
+	"sublink/database"
 	"sublink/models"
 	"sublink/utils"
 
@@ -25,7 +25,7 @@ func UserAdd(c *gin.Context) {
 	}
 	err := user.Create()
 	if err != nil {
-		log.Println("创建用户失败")
+		utils.Error("创建用户失败: %v", err)
 	}
 	utils.OkWithMsg(c, "创建用户成功")
 }
@@ -42,20 +42,11 @@ func UserMe(c *gin.Context) {
 		return
 	}
 	utils.OkDetailed(c, "获取用户信息成功", gin.H{
-		"avatar":   "static/avatar.gif",
+		"avatar":   "",
 		"nickname": user.Nickname,
 		"userId":   user.ID,
 		"username": user.Username,
 		"roles":    []string{"ADMIN"},
-		// "perms": []string{
-		// 	"sys:menu:delete", "sys:dept:edit", "sys:dict_type:add",
-		// 	"sys:dict:edit", "sys:dict:delete", "sys:dict_type:edit",
-		// 	"sys:menu:add", "sys:user:add", "sys:role:edit",
-		// 	"sys:dept:delete", "sys:user:password_reset", "sys:user:edit",
-		// 	"sys:user:delete", "sys:dept:add", "sys:role:delete",
-		// 	"sys:dict_type:delete", "sys:menu:edit", "sys:dict:add",
-		// 	"sys:role:add",
-		// },
 	})
 }
 
@@ -67,7 +58,7 @@ func UserPages(c *gin.Context) {
 	user := &models.User{Username: username.(string)}
 	users, err := user.All()
 	if err != nil {
-		log.Println("获取用户信息失败")
+		utils.Error("获取用户信息失败: %v", err)
 	}
 	list := []*User{}
 	for i := range users {
@@ -75,7 +66,7 @@ func UserPages(c *gin.Context) {
 			ID:       users[i].ID,
 			Username: users[i].Username,
 			Nickname: users[i].Nickname,
-			Avatar:   "static/avatar.gif",
+			Avatar:   "",
 		})
 	}
 	utils.OkDetailed(c, "获取用户信息成功", gin.H{
@@ -99,7 +90,7 @@ func UserSet(c *gin.Context) {
 		Password: NewPassword,
 	})
 	if err != nil {
-		log.Println(err)
+		utils.Error("修改密码失败: %v", err)
 		utils.FailWithMsg(c, err.Error())
 		return
 	}
@@ -150,9 +141,15 @@ func UserChangePassword(c *gin.Context) {
 	// 更新密码
 	updateUser := &models.User{Password: req.NewPassword}
 	if err := user.Set(updateUser); err != nil {
-		log.Println("密码修改失败:", err)
+		utils.Error("密码修改失败: %v", err)
 		utils.FailWithMsg(c, "密码修改失败")
 		return
+	}
+
+	// 删除该用户的所有记住密码令牌，强制重新登录
+	if err := models.DeleteUserRememberTokens(user.ID); err != nil {
+		utils.Error("清除记住密码令牌失败: %v", err)
+		// 不影响密码修改成功的返回
 	}
 
 	utils.OkWithMsg(c, "密码修改成功")
@@ -188,8 +185,8 @@ func UserUpdateProfile(c *gin.Context) {
 		"nickname": req.Nickname,
 	}
 
-	if err := models.DB.Where("username = ?", user.Username).Model(&models.User{}).Updates(updates).Error; err != nil {
-		log.Println("个人资料更新失败:", err)
+	if err := database.DB.Where("username = ?", user.Username).Model(&models.User{}).Updates(updates).Error; err != nil {
+		utils.Error("个人资料更新失败: %v", err)
 		utils.FailWithMsg(c, "个人资料更新失败: "+err.Error())
 		return
 	}

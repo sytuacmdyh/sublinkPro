@@ -1,0 +1,99 @@
+# SublinkPro 配置文件模板
+# ============================================
+# 复制此文件到 db/config.yaml 并根据需要修改
+# 
+# 配置优先级（从高到低）:
+#   1. 命令行参数 (--port, --db, etc.)
+#   2. 环境变量 (SUBLINK_PORT, SUBLINK_DB_PATH, etc.)
+#   3. 此配置文件
+#   4. 数据库存储（敏感配置）
+#   5. 程序默认值
+# ============================================
+
+# 服务端口
+# 环境变量: SUBLINK_PORT
+port: 8000
+
+# 日志等级 (debug/info/warn/error/fatal)
+# debug: 调试信息，开发时使用
+# info: 一般信息，正常运行状态（默认）
+# warn: 警告信息，潜在问题
+# error: 错误信息，操作失败
+# fatal: 致命错误，程序无法继续运行
+# 环境变量: SUBLINK_LOG_LEVEL
+log_level: info
+
+# Token 过期天数
+# 环境变量: SUBLINK_EXPIRE_DAYS
+expire_days: 14
+
+# ============================================
+# 登录安全配置
+# ============================================
+
+# 登录失败次数限制（达到后封禁IP）
+# 环境变量: SUBLINK_LOGIN_FAIL_COUNT
+login_fail_count: 5
+
+# 登录失败统计窗口（分钟）
+# 在此时间窗口内累计失败次数
+# 环境变量: SUBLINK_LOGIN_FAIL_WINDOW
+login_fail_window: 1
+
+# 登录失败封禁时间（分钟）
+# 环境变量: SUBLINK_LOGIN_BAN_DURATION
+login_ban_duration: 10
+
+# ============================================
+# GeoIP 配置
+# ============================================
+
+# GeoIP 数据库路径
+# 系统启动时会自动检测，如果文件不存在会异步下载
+# 下载进度会在控制台显示，不会阻塞系统启动
+# 环境变量: SUBLINK_GEOIP_PATH
+# geoip_path: ./db/GeoLite2-City.mmdb
+
+# ============================================
+# 验证码配置
+# ============================================
+
+# 验证码模式
+# 1 = 关闭验证码（不推荐，仅限内网环境）
+# 2 = 传统图形验证码（默认）
+# 3 = Cloudflare Turnstile
+# 环境变量: SUBLINK_CAPTCHA_MODE
+captcha_mode: 2
+
+# Cloudflare Turnstile 配置
+# 仅在 captcha_mode: 3 时需要
+# 如未配置将自动降级为传统验证码
+# 获取地址: https://dash.cloudflare.com/?to=/:account/turnstile
+# 环境变量: SUBLINK_TURNSTILE_SITE_KEY
+# turnstile_site_key: your-site-key
+# 环境变量: SUBLINK_TURNSTILE_SECRET_KEY
+# turnstile_secret_key: your-secret-key
+
+# Turnstile 验证代理配置
+# 如果服务器无法直接访问 Cloudflare API,可配置代理
+# 使用 mihomo 支持的代理链接格式（如 vless://, vmess://, ss:// 等）
+# 填写即使用代理，未填写则直连
+# 环境变量: SUBLINK_TURNSTILE_PROXY_LINK
+# turnstile_proxy_link: vless://your-proxy-link...
+
+# ============================================
+# 敏感配置说明
+# ============================================
+# 以下敏感配置不再存储在此文件中，而是存储在数据库中
+# 您可以通过环境变量覆盖这些配置：
+#
+# JWT 签名密钥（用于用户登录令牌）:
+#   - 环境变量: SUBLINK_JWT_SECRET
+#   - 如未设置，系统会自动生成并存储到数据库
+#
+# API 加密密钥（用于 API Key 的加密）:
+#   - 环境变量: SUBLINK_API_ENCRYPTION_KEY
+#   - 如未设置，系统会自动生成并存储到数据库
+#
+# 注意：如果您需要在多实例部署时保持一致性，
+#       请务必通过环境变量设置这些值！

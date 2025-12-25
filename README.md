@@ -1,131 +1,195 @@
 <div align="center">
-<img src="webs/src/assets/logo.png" width="150px" height="150px" />
+  <img src="webs/src/assets/images/logo.svg" width="280px" />
+  
+  **✨ 强大的代理订阅管理与转换工具 ✨**
+
+  <p>
+    <img src="https://img.shields.io/github/go-mod/go-version/ZeroDeng01/sublinkPro?style=flat-square&logo=go&logoColor=white" alt="Go Version"/>
+    <img src="https://img.shields.io/github/package-json/dependency-version/ZeroDeng01/sublinkPro/react?filename=webs%2Fpackage.json&style=flat-square&logo=react&logoColor=white&color=61DAFB" alt="React Version"/>
+    <img src="https://img.shields.io/github/package-json/dependency-version/ZeroDeng01/sublinkPro/@mui/material?filename=webs%2Fpackage.json&style=flat-square&logo=mui&logoColor=white&label=MUI&color=007FFF" alt="MUI Version"/>
+    <img src="https://img.shields.io/github/package-json/dependency-version/ZeroDeng01/sublinkPro/vite?filename=webs%2Fpackage.json&style=flat-square&logo=vite&logoColor=white&color=646CFF" alt="Vite Version"/>
+  </p>
+  <p>
+    <img src="https://img.shields.io/github/v/release/ZeroDeng01/sublinkPro?style=flat-square&logo=github&label=Latest" alt="Latest Release"/>
+    <img src="https://img.shields.io/github/release-date/ZeroDeng01/sublinkPro?style=flat-square&logo=github&label=Release%20Date" alt="Release Date"/>
+  </p>
+  <p>
+    <img src="https://img.shields.io/docker/v/zerodeng/sublink-pro/latest?style=flat-square&logo=docker&logoColor=white&label=Docker%20Stable" alt="Docker Stable Version"/>
+    <img src="https://img.shields.io/docker/pulls/zerodeng/sublink-pro?style=flat-square&logo=docker&logoColor=white&label=Docker%20Pulls" alt="Docker Pulls"/>
+    <img src="https://img.shields.io/docker/image-size/zerodeng/sublink-pro/latest?style=flat-square&logo=docker&logoColor=white&label=Image%20Size" alt="Docker Image Size"/>
+  </p>
+  <p>
+    <img src="https://img.shields.io/github/stars/ZeroDeng01/sublinkPro?style=flat-square&logo=github&label=Stars" alt="GitHub Stars"/>
+    <img src="https://img.shields.io/github/forks/ZeroDeng01/sublinkPro?style=flat-square&logo=github&label=Forks" alt="GitHub Forks"/>
+    <img src="https://img.shields.io/github/issues/ZeroDeng01/sublinkPro?style=flat-square&logo=github&label=Issues" alt="GitHub Issues"/>
+    <img src="https://img.shields.io/github/license/ZeroDeng01/sublinkPro?style=flat-square&label=License" alt="License"/>
+  </p>
+  <p>
+    <a href="https://github.com/ZeroDeng01/sublinkPro/issues">
+      <img src="https://img.shields.io/badge/问题反馈-Issues-blue?style=flat-square&logo=github" alt="Issues"/>
+    </a>
+    <a href="https://github.com/ZeroDeng01/sublinkPro/releases">
+      <img src="https://img.shields.io/badge/版本下载-Releases-green?style=flat-square&logo=github" alt="Releases"/>
+    </a>
+  </p>
 </div>
+
+---
+
+## 📖 项目简介
+
+`SublinkPro` 是基于优秀的开源项目 [sublinkX](https://github.com/gooaclok819/sublinkX) / [sublinkE](https://github.com/eun1e/sublinkE) 进行二次开发，在原项目基础上做了部分定制优化。感谢原作者的付出与贡献。
+
+- 🎨 **前端框架**：基于 [Berry Free React Material UI Admin Template](https://github.com/codedthemes/berry-free-react-admin-template)
+- ⚡ **后端技术**：Go + Gin + Gorm
+- 🔐 **默认账号**：`admin` / `123456`（请安装后务必修改）
+- 💻 **演示系统**: [https://sublink-pro-demo.zeabur.app](https://sublink-pro-demo.zeabur.app/) 用户名：admin 密码：123456
+
+> [!WARNING]
+> ⚠️ 本项目和原项目数据库不兼容，请不要混用。
+>
+> ⚠️ 请不要使用本项目以及任何本项目的衍生项目进行违反您以及您所服务用户的所在地法律法规的活动。本项目仅供个人开发和学习交流使用。
+
+---
+
+## ✨ 功能亮点
+
+| 功能 | 说明 | 详情 |
+|:---|:---|:---:|
+| 🏷️ **智能标签系统** | 自动规则打标签、零代码筛选、标签互斥组 | [📖](docs/features/tags.md) |
+| ⚡ **专业测速系统** | 双阶段测试、智能延迟测量、自动状态标记 | [📖](docs/features/speedtest.md) |
+| 🔗 **链式代理** | Dialer-Proxy 原生支持、可视化配置、拯救被墙节点 | [📖](docs/features/chain-proxy.md) |
+| ✈️ **机场管理** | 多格式导入、定时更新、流量监控 | [📖](docs/features/airport.md) |
+| 📋 **订阅分享** | 多链接管理、过期策略、访问统计 | [📖](docs/features/subscription-share.md) |
+| 🌐 **Host 管理** | 域名映射、DNS 配置、CDN 优选 | [📖](docs/features/host.md) |
+| 🤖 **Telegram Bot** | 远程测速、订阅管理、系统监控 | [📖](docs/features/telegram-bot.md) |
+| 📜 **脚本系统** | 节点过滤、内容后处理、多脚本链式执行 | [📖](docs/script_support.md) |
+| 🔔 **Webhooks** | 支持 PushDeer、Bark、钉钉、方糖等多平台通知 | - |
+| 🔐 **安全特性** | Token 授权、API Key、IP 黑/白名单、访问日志 | - |
+
+---
+
+## 🚀 快速开始
+
+### Docker Compose（推荐）
+
+创建 `docker-compose.yml`：
+
+```yaml
+services:
+  sublinkpro:
+    image: yzcczdyh/sublink-pro
+    container_name: sublinkpro
+    ports:
+      - "8000:8000"
+    volumes:
+      - "./db:/app/db"
+      - "./template:/app/template"
+      - "./logs:/app/logs"
+    restart: unless-stopped
+```
+
+启动服务：
+
+```bash
+docker-compose up -d
+```
+
+访问 `http://localhost:8000`，使用默认账号 `admin` / `123456` 登录。
+
+> [!TIP]
+> 更多安装方式（Docker、一键脚本、更新升级等）请参阅 [📦 安装部署指南](docs/installation.md)
+
+---
+
+## 📖 文档导航
+
+### 🔧 安装与配置
+
+| 文档 | 说明 |
+|:---|:---|
+| [📦 安装部署](docs/installation.md) | Docker、一键脚本、更新升级、Watchtower 自动更新 |
+| [⚙️ 配置说明](docs/configuration.md) | 环境变量、命令行参数、验证码配置 |
+
+### ✨ 功能详解
+
+| 文档 | 说明 |
+|:---|:---|
+| [🏷️ 智能标签系统](docs/features/tags.md) | 自动规则打标签、零代码筛选、标签互斥组 |
+| [⚡ 测速系统](docs/features/speedtest.md) | 测速原理、参数配置、流量计算 |
+| [🔗 链式代理](docs/features/chain-proxy.md) | Dialer-Proxy、使用场景、配置流程 |
+| [✈️ 机场管理](docs/features/airport.md) | 订阅导入、定时更新、流量监控 |
+| [📋 订阅分享](docs/features/subscription-share.md) | 多链接管理、过期策略、访问统计 |
+| [🌐 Host 管理](docs/features/host.md) | 域名映射、DNS 配置、测速持久化 |
+| [🤖 Telegram 机器人](docs/features/telegram-bot.md) | 命令列表、配置指南 |
+| [📜 脚本功能](docs/script_support.md) | 节点过滤、内容后处理、函数参考 |
+
+### 👨‍💻 开发者
+
+| 文档 | 说明 |
+|:---|:---|
+| [🛠️ 开发指南](docs/development.md) | 项目结构、本地开发、定时任务开发 |
+
+---
+
+## 📡 多协议支持
+
+| 客户端 | 支持协议 |
+|:---|:---|
+| **v2ray** | base64 通用格式 |
+| **clash** | ss, ssr, trojan, vmess, vless, hy, hy2, tuic, AnyTLS, Socks5 |
+| **surge** | ss, trojan, vmess, hy2, tuic |
+
+---
+
+## 🖼️ 项目预览
+
+<details open>
+<summary><b>点击展开/收起预览图</b></summary>
+
+| | |
+|:---:|:---:|
+| ![预览1](docs/images/1.jpg) | ![预览2](docs/images/2.jpg) |
+| ![预览3](docs/images/3.jpg) | ![预览4](docs/images/4.jpg) |
+| ![预览5](docs/images/5.jpg) | ![预览6](docs/images/6.jpg) |
+| ![预览7](docs/images/7.jpg) | ![预览8](docs/images/8.jpg) |
+| ![预览9](docs/images/9.jpg) | ![预览10](docs/images/10.jpg) |
+| ![预览11](docs/images/11.jpg) | ![预览12](docs/images/12.jpg) |
+
+</details>
+
+---
+
+## 📊 项目统计
 
 <div align="center">
-  <img src="https://img.shields.io/badge/Vue-5.0.8-brightgreen.svg"/>
-  <img src="https://img.shields.io/badge/Go-1.24.3-green.svg"/>
-  <img src="https://img.shields.io/badge/Element%20Plus-2.6.1-blue.svg"/>
-  <img src="https://img.shields.io/badge/license-MIT-green.svg"/>
-  <div align="center"> 中文 | <a href="README.en-US.md">English</div>
 
-
+[//]: # (  <img src="https://repobeez.abhijithganesh.com/api/insert/ZeroDeng01/sublinkPro" alt="Repobeez" height="0" width="0" style="display: none"/>)
+  
+  ![Star History Chart](https://api.star-history.com/svg?repos=ZeroDeng01/sublinkPro&type=Date)
 </div>
 
-# 项目简介
+---
 
-`sublinkPro` 是基于优秀的开源项目  [sublinkX](https://github.com/gooaclok819/sublinkX) /[sublinkE](https://github.com/eun1e/sublinkE)  进行二次开发，在原项目基础上做了部分定制优化。建议用户优先参考和使用原项目，感谢原作者的付出与贡献。
+## 🤝 贡献与支持
 
-**⚠️本项目和原项目数据库不兼容，请不要混用。**
+如果这个项目对您有帮助，欢迎：
 
-- 前端基于 [vue3-element-admin](https://github.com/youlaitech/vue3-element-admin)；
-- 后端采用 Go + Gin + Gorm；
-- 默认账号：admin 密码：123456，请安装后务必自行修改；
+- ⭐ **Star** 这个项目表示支持
+- 🐛 提交 [Issue](https://github.com/ZeroDeng01/sublinkPro/issues) 反馈问题或建议
+- 🔧 提交 Pull Request 贡献代码
+- 📖 完善文档和使用教程
 
-# 修改内容
+### 🙏 致谢
 
+感谢以下项目的开源贡献：
 
-- [x] 修复部分页面BUG
-- [x] 支持 Clash `dialer-proxy` 属性
-- [x] 允许添加并使用 API KEY 访问 API
-- [x] 导入、定时更新订阅链接中的节点
-- [x] 支持AnyTLS、Socks5协议
-- [x] 订阅节点排序
-- [x] 支持订阅的IP黑/白名单功能
-- [x] 支持节点测速功能
-- [x] 支持按照测速结果作为条件筛选返回的节点
-- [x] 支持javascript脚本进行订阅操作
-- [x] 支持webhooks通知，比如pushdeer、Bark、钉钉、方糖等在订阅更新或者测速结束的时候进行通知
-- [ ] ...
+- [sublinkX](https://github.com/gooaclok819/sublinkX) / [sublinkE](https://github.com/eun1e/sublinkE) - 原始项目
+- [Berry Free React Admin Template](https://github.com/codedthemes/berry-free-react-admin-template) - 前端模板
+- [Mihomo](https://github.com/MetaCubeX/mihomo) - 代理核心
 
-# 项目特色
+---
 
-- 高自由度与安全性，支持访问订阅记录及简易配置管理；
-- 支持多种客户端协议及格式，包括：
-    - v2ray（base64 通用格式）
-    - clash（支持 ss, ssr, trojan, vmess, vless, hy, hy2, tuic, AnyTLS, Socks5）
-    - surge（支持 ss, trojan, vmess, hy2, tuic）
-- 新增 token 授权及订阅导入功能，增强安全性和便捷性。
-
-# 安装说明
-
-## Docker 运行
-```bash
-docker run --name sublinke -p 8000:8000 \
--v $PWD/db:/app/db \
--v $PWD/template:/app/template \
--v $PWD/logs:/app/logs \
--d yzcczdyh/sublink-pro 
-```
-
-## 一键安装
-```bash
-wget https://raw.githubusercontent.com/ZeroDeng01/sublinkPro/refs/heads/main/install.sh   && sh install.sh
-```
-
-> ⚠ **注意**  
-> 在 **Alpine Linux** 上运行一键安装脚本时，由于 Alpine 使用 `musl` 而非 `glibc`，插件模块无法正常工作。 
-> 推荐优先使用 **Docker 部署** 以获得最佳兼容性，或可选择 **Debian / Ubuntu** 等发行版。
-
-
-
-# 项目预览
-
-![预览1](webs/src/assets/1.png)
-![预览2](webs/src/assets/2.png)
-![预览3](webs/src/assets/3.png)
-![预览4](webs/src/assets/4.png)
-![预览5](webs/src/assets/5.png)
-![预览6](webs/src/assets/6.png)
-
-# 脚本功能说明
-
-SublinkPro 支持使用 JavaScript 脚本对订阅内容进行自定义处理。脚本可以包含以下两个主要函数：
-
-## 1. 节点过滤 (filterNode)
-
-`filterNode` 函数在生成订阅内容之前执行，用于对节点列表进行过滤或修改。
-
-**函数签名:**
-```javascript
-function filterNode(nodes, clientType) {
-    // nodes: 节点对象数组
-    // clientType: 客户端类型 (v2ray, clash, surge)
-    // 返回值: 修改后的节点对象数组
-    return nodes;
-}
-```
-
-**示例:**
-```javascript
-function filterNode(nodes, clientType) {
-    // 过滤掉名称包含 "测试" 的节点
-    var newNodes = [];
-    for (var i = 0; i < nodes.length; i++) {
-        if (nodes[i].Name.indexOf("测试") === -1) {
-            newNodes.push(nodes[i]);
-        }
-    }
-    return newNodes;
-}
-```
-
-## 2. 内容后处理 (subMod)
-
-`subMod` 函数在生成最终订阅内容之后执行，用于对最终的文本内容进行修改。
-
-**函数签名:**
-```javascript
-function subMod( input, clientType) {
-    // input: 原始输入内容
-    // clientType: 客户端类型
-    // 返回值: 修改后的内容字符串
-    return input; // 注意：此处示例仅为示意，实际应返回处理后的字符串
-}
-```
-
-**脚本支持的函数请查看【[脚本文档](docs/script_support.md)】**
-
-**注意:**
-- 脚本中可以使用 `console.log()` 输出日志到后台。
-- 多个脚本会按照排序顺序依次执行。
+<div align="center">
+  <sub>Made with ❤️ by <a href="https://github.com/ZeroDeng01">ZeroDeng01</a></sub>
+</div>

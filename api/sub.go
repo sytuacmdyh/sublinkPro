@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sublink/dto"
 	"sublink/models"
+	"sublink/node/protocol"
 	"sublink/utils"
 	"time"
 
@@ -25,6 +26,43 @@ func SubTotal(c *gin.Context) {
 // 获取订阅列表
 func SubGet(c *gin.Context) {
 	var Sub models.Subcription
+
+	// 解析分页参数
+	page := 0
+	pageSize := 0
+	if pageStr := c.Query("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+	if pageSizeStr := c.Query("pageSize"); pageSizeStr != "" {
+		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 {
+			pageSize = ps
+		}
+	}
+
+	// 如果提供了分页参数，返回分页响应
+	if page > 0 && pageSize > 0 {
+		subs, total, err := Sub.ListPaginated(page, pageSize)
+		if err != nil {
+			utils.FailWithMsg(c, "获取订阅列表失败")
+			return
+		}
+		totalPages := 0
+		if pageSize > 0 {
+			totalPages = int((total + int64(pageSize) - 1) / int64(pageSize))
+		}
+		utils.OkDetailed(c, "获取成功", gin.H{
+			"items":      subs,
+			"total":      total,
+			"page":       page,
+			"pageSize":   pageSize,
+			"totalPages": totalPages,
+		})
+		return
+	}
+
+	// 不带分页参数，返回全部（向后兼容）
 	Subs, err := Sub.List()
 	if err != nil {
 		utils.FailWithMsg(c, "node list error")
@@ -38,7 +76,7 @@ func SubAdd(c *gin.Context) {
 	var sub models.Subcription
 	name := c.PostForm("name")
 	config := c.PostForm("config")
-	nodes := c.PostForm("nodes")
+	nodeIds := c.PostForm("nodeIds") // 改为接收节点ID列表
 	groups := c.PostForm("groups")   // 新增：分组列表
 	scripts := c.PostForm("scripts") // 新增：脚本列表
 	ipWhitelist := c.PostForm("IPWhitelist")
@@ -47,8 +85,21 @@ func SubAdd(c *gin.Context) {
 	delayTime, _ := strconv.Atoi(delayTimeStr)
 	minSpeedStr := c.PostForm("MinSpeed")
 	minSpeed, _ := strconv.ParseFloat(minSpeedStr, 64)
+	countryWhitelist := c.PostForm("CountryWhitelist")
+	countryBlacklist := c.PostForm("CountryBlacklist")
+	nodeNameRule := c.PostForm("NodeNameRule")
+	nodeNamePreprocess := c.PostForm("NodeNamePreprocess")
+	nodeNameWhitelist := c.PostForm("NodeNameWhitelist")
+	nodeNameBlacklist := c.PostForm("NodeNameBlacklist")
+	tagWhitelist := c.PostForm("TagWhitelist")
+	tagBlacklist := c.PostForm("TagBlacklist")
+	protocolWhitelist := c.PostForm("ProtocolWhitelist")
+	protocolBlacklist := c.PostForm("ProtocolBlacklist")
+	deduplicationRule := c.PostForm("DeduplicationRule")
+	refreshUsageOnRequestStr := c.PostForm("RefreshUsageOnRequest")
+	refreshUsageOnRequest := refreshUsageOnRequestStr != "false" // 默认为 true
 
-	if name == "" || (nodes == "" && groups == "") {
+	if name == "" || (nodeIds == "" && groups == "") {
 		utils.FailWithMsg(c, "订阅名称不能为空，且节点或分组至少选择一项")
 		return
 	}
@@ -76,15 +127,28 @@ func SubAdd(c *gin.Context) {
 	}
 
 	sub.Nodes = []models.Node{}
-	if nodes != "" {
-		for _, v := range strings.Split(nodes, ",") {
-			var node models.Node
-			node.Name = v
-			err := node.Find()
+	if nodeIds != "" {
+		nodeNameSet := make(map[string]bool) // 按节点名称去重（Clash等客户端不支持重名节点）
+		for _, v := range strings.Split(nodeIds, ",") {
+			v = strings.TrimSpace(v)
+			if v == "" {
+				continue
+			}
+			id, err := strconv.Atoi(v)
 			if err != nil {
 				continue
 			}
-			sub.Nodes = append(sub.Nodes, node)
+			var node models.Node
+			node.ID = id
+			err = node.GetByID() // 直接用ID获取节点
+			if err != nil {
+				continue
+			}
+			// 按节点名称去重，同名节点只保留第一个
+			if !nodeNameSet[node.Name] {
+				nodeNameSet[node.Name] = true
+				sub.Nodes = append(sub.Nodes, node)
+			}
 		}
 	}
 
@@ -94,6 +158,18 @@ func SubAdd(c *gin.Context) {
 	sub.IPBlacklist = ipBlacklist
 	sub.DelayTime = delayTime
 	sub.MinSpeed = minSpeed
+	sub.CountryWhitelist = countryWhitelist
+	sub.CountryBlacklist = countryBlacklist
+	sub.NodeNameRule = nodeNameRule
+	sub.NodeNamePreprocess = nodeNamePreprocess
+	sub.NodeNameWhitelist = nodeNameWhitelist
+	sub.NodeNameBlacklist = nodeNameBlacklist
+	sub.TagWhitelist = tagWhitelist
+	sub.TagBlacklist = tagBlacklist
+	sub.ProtocolWhitelist = protocolWhitelist
+	sub.ProtocolBlacklist = protocolBlacklist
+	sub.DeduplicationRule = deduplicationRule
+	sub.RefreshUsageOnRequest = refreshUsageOnRequest
 	sub.CreateDate = time.Now().Format("2006-01-02 15:04:05")
 
 	err := sub.Add()
@@ -147,7 +223,7 @@ func SubUpdate(c *gin.Context) {
 	name := c.PostForm("name")
 	oldname := c.PostForm("oldname")
 	config := c.PostForm("config")
-	nodes := c.PostForm("nodes")
+	nodeIds := c.PostForm("nodeIds") // 改为接收节点ID列表
 	groups := c.PostForm("groups")   // 新增：分组列表
 	scripts := c.PostForm("scripts") // 新增：脚本列表
 	ipWhitelist := c.PostForm("IPWhitelist")
@@ -156,8 +232,21 @@ func SubUpdate(c *gin.Context) {
 	delayTime, _ := strconv.Atoi(delayTimeStr)
 	minSpeedStr := c.PostForm("MinSpeed")
 	minSpeed, _ := strconv.ParseFloat(minSpeedStr, 64)
+	countryWhitelist := c.PostForm("CountryWhitelist")
+	countryBlacklist := c.PostForm("CountryBlacklist")
+	nodeNameRule := c.PostForm("NodeNameRule")
+	nodeNamePreprocess := c.PostForm("NodeNamePreprocess")
+	nodeNameWhitelist := c.PostForm("NodeNameWhitelist")
+	nodeNameBlacklist := c.PostForm("NodeNameBlacklist")
+	tagWhitelist := c.PostForm("TagWhitelist")
+	tagBlacklist := c.PostForm("TagBlacklist")
+	protocolWhitelist := c.PostForm("ProtocolWhitelist")
+	protocolBlacklist := c.PostForm("ProtocolBlacklist")
+	deduplicationRule := c.PostForm("DeduplicationRule")
+	refreshUsageOnRequestStr := c.PostForm("RefreshUsageOnRequest")
+	refreshUsageOnRequest := refreshUsageOnRequestStr != "false" // 默认为 true
 
-	if name == "" || (nodes == "" && groups == "") {
+	if name == "" || (nodeIds == "" && groups == "") {
 		utils.FailWithMsg(c, "订阅名称不能为空，且节点或分组至少选择一项")
 		return
 	}
@@ -198,21 +287,46 @@ func SubUpdate(c *gin.Context) {
 	sub.Name = name
 	sub.CreateDate = time.Now().Format("2006-01-02 15:04:05")
 	sub.Nodes = []models.Node{}
-	if nodes != "" {
-		for _, v := range strings.Split(nodes, ",") {
-			var node models.Node
-			node.Name = v
-			err := node.Find()
+	if nodeIds != "" {
+		nodeNameSet := make(map[string]bool) // 按节点名称去重（Clash等客户端不支持重名节点）
+		for _, v := range strings.Split(nodeIds, ",") {
+			v = strings.TrimSpace(v)
+			if v == "" {
+				continue
+			}
+			id, err := strconv.Atoi(v)
 			if err != nil {
 				continue
 			}
-			sub.Nodes = append(sub.Nodes, node)
+			var node models.Node
+			node.ID = id
+			err = node.GetByID() // 直接用ID获取节点
+			if err != nil {
+				continue
+			}
+			// 按节点名称去重，同名节点只保留第一个
+			if !nodeNameSet[node.Name] {
+				nodeNameSet[node.Name] = true
+				sub.Nodes = append(sub.Nodes, node)
+			}
 		}
 	}
 	sub.IPWhitelist = ipWhitelist
 	sub.IPBlacklist = ipBlacklist
 	sub.DelayTime = delayTime
 	sub.MinSpeed = minSpeed
+	sub.CountryWhitelist = countryWhitelist
+	sub.CountryBlacklist = countryBlacklist
+	sub.NodeNameRule = nodeNameRule
+	sub.NodeNamePreprocess = nodeNamePreprocess
+	sub.NodeNameWhitelist = nodeNameWhitelist
+	sub.NodeNameBlacklist = nodeNameBlacklist
+	sub.TagWhitelist = tagWhitelist
+	sub.TagBlacklist = tagBlacklist
+	sub.ProtocolWhitelist = protocolWhitelist
+	sub.ProtocolBlacklist = protocolBlacklist
+	sub.DeduplicationRule = deduplicationRule
+	sub.RefreshUsageOnRequest = refreshUsageOnRequest
 	err = sub.Update()
 	if err != nil {
 		utils.FailWithMsg(c, "更新失败")
@@ -281,6 +395,36 @@ func SubDel(c *gin.Context) {
 	utils.OkWithMsg(c, "删除成功")
 }
 
+// SubCopy 复制订阅
+func SubCopy(c *gin.Context) {
+	var sub models.Subcription
+	id := c.Query("id")
+	if id == "" {
+		utils.FailWithMsg(c, "id 不能为空")
+		return
+	}
+	x, err := strconv.Atoi(id)
+	if err != nil {
+		utils.FailWithMsg(c, "id 格式错误")
+		return
+	}
+	sub.ID = x
+	err = sub.Find()
+	if err != nil {
+		utils.FailWithMsg(c, "订阅不存在")
+		return
+	}
+
+	// 执行复制
+	newSub, err := sub.Copy()
+	if err != nil {
+		utils.FailWithMsg(c, "复制失败: "+err.Error())
+		return
+	}
+
+	utils.OkDetailed(c, "复制成功", newSub)
+}
+
 func SubSort(c *gin.Context) {
 	var subNodeSort dto.SubcriptionNodeSortUpdate
 	err := c.BindJSON(&subNodeSort)
@@ -298,4 +442,55 @@ func SubSort(c *gin.Context) {
 		return
 	}
 	utils.OkWithMsg(c, "更新排序成功")
+}
+
+// SubBatchSort 批量排序订阅节点
+func SubBatchSort(c *gin.Context) {
+	var req dto.BatchSortRequest
+	if err := c.BindJSON(&req); err != nil {
+		utils.FailWithMsg(c, "参数错误: "+err.Error())
+		return
+	}
+
+	// 验证排序字段
+	validSortBy := map[string]bool{
+		"source": true, "name": true, "protocol": true,
+		"delay": true, "speed": true, "country": true,
+	}
+	if !validSortBy[req.SortBy] {
+		utils.FailWithMsg(c, "无效的排序字段")
+		return
+	}
+
+	// 验证排序方向
+	if req.SortOrder != "asc" && req.SortOrder != "desc" {
+		utils.FailWithMsg(c, "无效的排序方向")
+		return
+	}
+
+	var sub models.Subcription
+	sub.ID = req.ID
+	if err := sub.Find(); err != nil {
+		utils.FailWithMsg(c, "订阅不存在")
+		return
+	}
+
+	if err := sub.BatchSort(req.SortBy, req.SortOrder); err != nil {
+		utils.FailWithMsg(c, err.Error())
+		return
+	}
+
+	utils.OkWithMsg(c, "批量排序成功")
+}
+
+// GetProtocolMeta 获取协议元数据（协议列表及其可用字段）
+func GetProtocolMeta(c *gin.Context) {
+	meta := protocol.GetAllProtocolMeta()
+	utils.OkDetailed(c, "获取成功", meta)
+}
+
+// GetNodeFieldsMeta 获取节点通用字段元数据
+func GetNodeFieldsMeta(c *gin.Context) {
+	meta := models.GetNodeFieldsMeta()
+	utils.OkDetailed(c, "获取成功", meta)
 }

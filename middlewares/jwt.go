@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sublink/config"
 	"sublink/models"
 	"sublink/utils"
 
@@ -11,7 +12,15 @@ import (
 	"github.com/golang-jwt/jwt/v4"
 )
 
-var Secret = []byte(models.ReadConfig().JwtSecret) // 秘钥
+// getJwtSecret 获取 JWT 密钥（动态获取，支持配置热更新）
+func getJwtSecret() []byte {
+	secret := config.GetJwtSecret()
+	if secret == "" {
+		// 回退到旧的配置读取方式（兼容性）
+		secret = models.ReadConfig().JwtSecret
+	}
+	return []byte(secret)
+}
 
 // JwtClaims jwt声明
 type JwtClaims struct {
@@ -21,28 +30,13 @@ type JwtClaims struct {
 
 // AuthToken 验证token中间件
 func AuthToken(c *gin.Context) {
-	// 定义白名单
-	list := []string{"/static", "/api/v1/auth/login", "/api/v1/auth/captcha", "/c/", "/api/v1/version"}
-	// 如果是首页直接跳过
-	if c.Request.URL.Path == "/" {
-		c.Next()
-		return
-	}
-	// 如果是白名单直接跳过
-	for _, v := range list {
-		if strings.HasPrefix(c.Request.URL.Path, v) {
-			c.Next()
-			return
-		}
-	}
-
 	// 检查api key
 	accessKey := c.GetHeader("X-API-Key")
 
 	if accessKey != "" {
 		username, bool, err := validApiKey(accessKey)
 		if err != nil || !bool {
-			utils.FailWithMsg(c, err.Error())
+			utils.Forbidden(c, err.Error())
 			c.Abort()
 			return
 		}
@@ -56,13 +50,13 @@ func AuthToken(c *gin.Context) {
 		token = c.Query("token")
 	}
 	if token == "" {
-		utils.FailWithMsg(c, "请求未携带token")
+		utils.Forbidden(c, "请求未携带token")
 		c.Abort()
 		return
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		utils.FailWithMsg(c, "token格式错误")
+		utils.Forbidden(c, "token格式错误")
 		c.Abort()
 		return
 	}
@@ -70,7 +64,7 @@ func AuthToken(c *gin.Context) {
 	token = strings.Replace(token, "Bearer ", "", -1)
 	mc, err := ParseToken(token)
 	if err != nil {
-		utils.FailWithCode(c, 401, err.Error())
+		utils.Forbidden(c, err.Error())
 		c.Abort()
 		return
 	}
@@ -82,7 +76,7 @@ func AuthToken(c *gin.Context) {
 func ParseToken(tokenString string) (*JwtClaims, error) {
 	// 解析token
 	token, err := jwt.ParseWithClaims(tokenString, &JwtClaims{}, func(token *jwt.Token) (i interface{}, err error) {
-		return Secret, nil
+		return getJwtSecret(), nil
 	})
 	if err != nil {
 		return nil, err
@@ -101,8 +95,11 @@ func validApiKey(apiKey string) (string, bool, error) {
 		return "", false, fmt.Errorf("API Key格式错误")
 	}
 
-	config := models.ReadConfig()
-	encryptionKey := config.APIEncryptionKey
+	encryptionKey := config.GetAPIEncryptionKey()
+	if encryptionKey == "" {
+		// 回退到旧的配置读取方式（兼容性）
+		encryptionKey = models.ReadConfig().APIEncryptionKey
+	}
 
 	// 解密用户ID
 	userID, err := utils.DecryptUserIDCompact(parts[1], []byte(encryptionKey))

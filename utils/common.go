@@ -5,13 +5,15 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
-	"log"
 	"math/big"
 	"math/rand"
 	"net"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // 检查环境
@@ -97,13 +99,13 @@ func DecryptUserIDCompact(encrypted string, key []byte) (int, error) {
 	// Base62解码
 	encryptedBytes, err := FromBase62(encrypted)
 	if err != nil {
-		log.Println("Base62解码失败:", err)
+		Error("Base62解码失败: %v", err)
 		return 0, fmt.Errorf("Base62解码失败: %w", err)
 	}
 
 	// 确保长度不超过4字节
 	if len(encryptedBytes) > 4 {
-		log.Println("解码后数据长度超过4字节:", len(encryptedBytes))
+		Error("解码后数据长度超过4字节: %d", len(encryptedBytes))
 		return 0, fmt.Errorf("解码后数据长度超过4字节: %d", len(encryptedBytes))
 	}
 
@@ -122,13 +124,6 @@ func DecryptUserIDCompact(encrypted string, key []byte) (int, error) {
 	// 转换回用户ID，使用uint32确保不会出现负数
 	userID := int(binary.BigEndian.Uint32(decrypted))
 	return userID, nil
-}
-
-type SqlConfig struct {
-	Clash string `json:"clash"`
-	Surge string `json:"surge"`
-	Udp   bool   `json:"udp"`
-	Cert  bool   `json:"cert"`
 }
 
 // ipv6地址匹配规则
@@ -274,4 +269,53 @@ func IpFormatValidation(ipString string) bool {
 		}
 	}
 	return true
+}
+
+// FormatBytes 格式化字节数
+func FormatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// IsUUID 检测是否为UUID
+func IsUUID(id string) bool {
+	_, err := uuid.Parse(id)
+	return err == nil
+}
+
+// GetPortString 将 interface{} 类型的端口转换为字符串
+func GetPortString(port interface{}) string {
+	switch p := port.(type) {
+	case int:
+		return strconv.Itoa(p)
+	case float64:
+		return strconv.Itoa(int(p))
+	case string:
+		return p
+	default:
+		return fmt.Sprintf("%v", port)
+	}
+}
+
+// GetPortInt 将 interface{} 类型的端口转换为整数
+func GetPortInt(port interface{}) int {
+	switch p := port.(type) {
+	case int:
+		return p
+	case float64:
+		return int(p)
+	case string:
+		val, _ := strconv.Atoi(p)
+		return val
+	default:
+		return 0
+	}
 }

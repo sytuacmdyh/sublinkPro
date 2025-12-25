@@ -575,6 +575,11 @@ func DecodeClash(proxys []Proxy, yamlfile string, customGroups ...[]CustomProxyG
 			existingProxies, _ = proxyGroup["proxies"].([]interface{})
 		}
 
+		// 如果 existingProxies 不为空，则不追加节点
+		if len(existingProxies) > 0 {
+			continue
+		}
+
 		// 合并现有代理和新节点
 		var validProxies []interface{}
 		for _, p := range existingProxies {

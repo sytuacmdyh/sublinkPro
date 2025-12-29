@@ -36,6 +36,18 @@ type Airport struct {
 	SkipTLSVerify  bool   `gorm:"default:false" json:"skipTLSVerify"`  // 是否跳过TLS证书验证
 	Remark         string `json:"remark"`                              // 备注信息
 	Logo           string `json:"logo"`                                // Logo：URL、icon:图标名、或emoji字符
+	// 节点过滤规则（拉取时生效）
+	NodeNameWhitelist string `json:"nodeNameWhitelist"` // 节点名称白名单 (JSON数组)
+	NodeNameBlacklist string `json:"nodeNameBlacklist"` // 节点名称黑名单 (JSON数组)
+	ProtocolWhitelist string `json:"protocolWhitelist"` // 协议白名单（逗号分隔）
+	ProtocolBlacklist string `json:"protocolBlacklist"` // 协议黑名单（逗号分隔）
+	// 节点重命名规则（拉取时生效）
+	NodeNamePreprocess string `json:"nodeNamePreprocess"` // 原名预处理规则 (JSON数组)
+	// 节点去重规则（拉取时生效）
+	DeduplicationRule string `json:"deduplicationRule"` // 去重规则配置(JSON)
+	// 节点名称唯一化（拉取时生效）
+	NodeNameUniquify bool   `gorm:"default:false" json:"nodeNameUniquify"` // 是否开启节点名称唯一化
+	NodeNamePrefix   string `json:"nodeNamePrefix"`                        // 自定义名称前缀（可选）
 }
 
 // TableName 指定表名
@@ -83,6 +95,8 @@ func (a *Airport) Update() error {
 		"Name", "URL", "CronExpr", "Enabled", "LastRunTime", "NextRunTime",
 		"SuccessCount", "Group", "DownloadWithProxy", "ProxyLink", "UserAgent",
 		"FetchUsageInfo", "SkipTLSVerify", "Remark", "Logo",
+		"NodeNameWhitelist", "NodeNameBlacklist", "ProtocolWhitelist", "ProtocolBlacklist", "NodeNamePreprocess",
+		"DeduplicationRule", "NodeNameUniquify", "NodeNamePrefix",
 	).Updates(a).Error
 	if err != nil {
 		return err

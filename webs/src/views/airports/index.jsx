@@ -15,10 +15,14 @@ import Select from '@mui/material/Select';
 import Snackbar from '@mui/material/Snackbar';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
+import ToggleButton from '@mui/material/ToggleButton';
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 
 // icons
 import AddIcon from '@mui/icons-material/Add';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import ViewModuleIcon from '@mui/icons-material/ViewModule';
+import ViewListIcon from '@mui/icons-material/ViewList';
 
 // project imports
 import MainCard from 'ui-component/cards/MainCard';
@@ -27,10 +31,10 @@ import ConfirmDialog from 'components/ConfirmDialog';
 import TaskProgressPanel from 'components/TaskProgressPanel';
 import { getAirports, addAirport, updateAirport, deleteAirport, pullAirport, refreshAirportUsage } from 'api/airports';
 import { useTaskProgress } from 'contexts/TaskProgressContext';
-import { getNodeGroups, getNodes } from 'api/nodes';
+import { getNodeGroups, getNodes, getNodeProtocols } from 'api/nodes';
 
 // local components
-import { AirportTable, AirportMobileList, AirportFormDialog, DeleteAirportDialog } from './component';
+import { AirportTable, AirportListView, AirportMobileList, AirportFormDialog, DeleteAirportDialog } from './component';
 
 // utils
 import { validateCronExpression } from './utils';
@@ -51,6 +55,12 @@ export default function AirportList() {
   });
   const [totalItems, setTotalItems] = useState(0);
 
+  // 视图模式状态（card: 卡片，list: 列表）
+  const [viewMode, setViewMode] = useState(() => {
+    const saved = localStorage.getItem('airports_viewMode');
+    return saved || 'card';
+  });
+
   // 表单状态
   const [formOpen, setFormOpen] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
@@ -66,7 +76,16 @@ export default function AirportList() {
     userAgent: '',
     fetchUsageInfo: false,
     skipTLSVerify: false,
-    remark: ''
+    remark: '',
+    logo: '',
+    nodeNameWhitelist: '',
+    nodeNameBlacklist: '',
+    protocolWhitelist: '',
+    protocolBlacklist: '',
+    nodeNamePreprocess: '',
+    deduplicationRule: '',
+    nodeNameUniquify: false,
+    nodeNamePrefix: ''
   });
 
   // 搜索筛选状态
@@ -87,6 +106,7 @@ export default function AirportList() {
   const [groupOptions, setGroupOptions] = useState([]);
   const [proxyNodeOptions, setProxyNodeOptions] = useState([]);
   const [loadingProxyNodes, setLoadingProxyNodes] = useState(false);
+  const [protocolOptions, setProtocolOptions] = useState([]);
 
   // 消息提示
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
@@ -148,11 +168,22 @@ export default function AirportList() {
     }
   }, []);
 
+  // 获取协议列表
+  const fetchProtocolOptions = useCallback(async () => {
+    try {
+      const response = await getNodeProtocols();
+      setProtocolOptions(response.data || []);
+    } catch (error) {
+      console.error('获取协议列表失败:', error);
+    }
+  }, []);
+
   // 初始化
   useEffect(() => {
     fetchAirports();
     fetchGroupOptions();
-  }, [fetchAirports, fetchGroupOptions]);
+    fetchProtocolOptions();
+  }, [fetchAirports, fetchGroupOptions, fetchProtocolOptions]);
 
   // 任务进度钩子
   const { registerOnComplete, unregisterOnComplete } = useTaskProgress();
@@ -205,7 +236,15 @@ export default function AirportList() {
       fetchUsageInfo: false,
       skipTLSVerify: false,
       remark: '',
-      logo: ''
+      logo: '',
+      nodeNameWhitelist: '',
+      nodeNameBlacklist: '',
+      protocolWhitelist: '',
+      protocolBlacklist: '',
+      nodeNamePreprocess: '',
+      deduplicationRule: '',
+      nodeNameUniquify: false,
+      nodeNamePrefix: ''
     });
     setFormOpen(true);
   };
@@ -226,7 +265,15 @@ export default function AirportList() {
       fetchUsageInfo: airport.fetchUsageInfo || false,
       skipTLSVerify: airport.skipTLSVerify || false,
       remark: airport.remark || '',
-      logo: airport.logo || ''
+      logo: airport.logo || '',
+      nodeNameWhitelist: airport.nodeNameWhitelist || '',
+      nodeNameBlacklist: airport.nodeNameBlacklist || '',
+      protocolWhitelist: airport.protocolWhitelist || '',
+      protocolBlacklist: airport.protocolBlacklist || '',
+      nodeNamePreprocess: airport.nodeNamePreprocess || '',
+      deduplicationRule: airport.deduplicationRule || '',
+      nodeNameUniquify: airport.nodeNameUniquify || false,
+      nodeNamePrefix: airport.nodeNamePrefix || ''
     });
     if (airport.downloadWithProxy) {
       fetchProxyNodes();
@@ -327,7 +374,29 @@ export default function AirportList() {
     <MainCard
       title="机场管理"
       secondary={
-        <Stack direction="row" spacing={1}>
+        <Stack direction="row" spacing={1} alignItems="center">
+          {/* 视图切换按钮（仅桌面端显示） */}
+          {!matchDownMd && (
+            <ToggleButtonGroup
+              value={viewMode}
+              exclusive
+              onChange={(e, newMode) => {
+                if (newMode) {
+                  setViewMode(newMode);
+                  localStorage.setItem('airports_viewMode', newMode);
+                }
+              }}
+              size="small"
+              sx={{ mr: 1 }}
+            >
+              <ToggleButton value="card" sx={{ px: 1, py: 0.5 }}>
+                <ViewModuleIcon fontSize="small" />
+              </ToggleButton>
+              <ToggleButton value="list" sx={{ px: 1, py: 0.5 }}>
+                <ViewListIcon fontSize="small" />
+              </ToggleButton>
+            </ToggleButtonGroup>
+          )}
           <Button variant="contained" startIcon={<AddIcon />} onClick={handleAdd}>
             添加机场
           </Button>
@@ -410,6 +479,14 @@ export default function AirportList() {
           onPull={handlePull}
           onRefreshUsage={handleRefreshUsage}
         />
+      ) : viewMode === 'list' ? (
+        <AirportListView
+          airports={airports}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+          onPull={handlePull}
+          onRefreshUsage={handleRefreshUsage}
+        />
       ) : (
         <AirportTable
           airports={airports}
@@ -446,6 +523,7 @@ export default function AirportList() {
         groupOptions={groupOptions}
         proxyNodeOptions={proxyNodeOptions}
         loadingProxyNodes={loadingProxyNodes}
+        protocolOptions={protocolOptions}
         onClose={() => setFormOpen(false)}
         onSubmit={handleSubmit}
         onFetchProxyNodes={fetchProxyNodes}

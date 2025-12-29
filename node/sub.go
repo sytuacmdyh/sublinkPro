@@ -393,6 +393,25 @@ func scheduleClashToNodeLinks(id int, proxys []protocol.Proxy, subName string, r
 		utils.Error("获取机场 %s 的Group失败:  %v", subName, err)
 	}
 
+	// 应用机场节点过滤和重命名规则
+	if airport != nil {
+		originalCount := len(proxys)
+		proxys = applyAirportNodeFilter(airport, proxys)
+		if len(proxys) < originalCount {
+			utils.Info("📦订阅【%s】过滤后节点数量：%d（原始：%d，过滤掉：%d）", subName, len(proxys), originalCount, originalCount-len(proxys))
+		}
+		// 应用高级去重规则
+		beforeDedup := len(proxys)
+		proxys = applyAirportDeduplication(airport, proxys)
+		if len(proxys) < beforeDedup {
+			utils.Info("🔄订阅【%s】去重后节点数量：%d（去重前：%d，去重掉：%d）", subName, len(proxys), beforeDedup, beforeDedup-len(proxys))
+		}
+		//节点重命名
+		proxys = applyAirportNodeRename(airport, proxys)
+		// 节点名称唯一化（添加机场标识前缀，防止多机场节点重名）
+		proxys = applyAirportNodeUniquify(airport, proxys)
+	}
+
 	// 1. 获取该订阅当前在数据库中的所有节点
 	existingNodes, err := models.ListBySourceID(id)
 	if err != nil {
@@ -421,368 +440,18 @@ func scheduleClashToNodeLinks(id int, proxys []protocol.Proxy, subName string, r
 	for _, proxy := range proxys {
 		utils.Info("💾准备存储节点【%s】", proxy.Name)
 		var Node models.Node
-		var link string
-		//var systemNodeName = subName + "_" + strings.TrimSpace(proxy.Name) //系统节点名称
-		proxy.Name = strings.TrimSpace(proxy.Name) // 某些机场的节点名称可能包含空格
+
+		// 预处理：去除名称空格，处理 IPv6 地址
+		proxy.Name = strings.TrimSpace(proxy.Name)
 		proxy.Server = utils.WrapIPv6Host(proxy.Server)
-		switch strings.ToLower(proxy.Type) {
-		case "ss":
-			// ss://method:password@server:port#name
-			method := proxy.Cipher
-			password := proxy.Password
-			server := proxy.Server
-			port := int(proxy.Port)
-			name := proxy.Name
-			encoded := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", method, password)))
-			link = fmt.Sprintf("ss://%s@%s:%d#%s", encoded, server, port, name)
-		case "ssr":
-			// ssr://server:port:protocol:method:obfs:base64(password)/?remarks=base64(remarks)&obfsparam=base64(obfsparam)
-			server := proxy.Server
-			port := int(proxy.Port)
-			protocol := proxy.Protocol
-			method := proxy.Cipher
-			obfs := proxy.Obfs
-			password := base64.StdEncoding.EncodeToString([]byte(proxy.Password))
-			remarks := base64.StdEncoding.EncodeToString([]byte(proxy.Name))
-			obfsparam := ""
-			if proxy.Obfs_password != "" {
-				obfsparam = base64.StdEncoding.EncodeToString([]byte(proxy.Obfs_password))
-			}
-			params := fmt.Sprintf("remarks=%s", remarks)
-			if obfsparam != "" {
-				params += fmt.Sprintf("&obfsparam=%s", obfsparam)
-			}
-			data := fmt.Sprintf("%s:%d:%s:%s:%s:%s/?%s", server, port, protocol, method, obfs, password, params)
-			link = fmt.Sprintf("ssr://%s", base64.StdEncoding.EncodeToString([]byte(data)))
 
-		case "trojan":
-			// trojan://password@server:port?参数#name
-			password := proxy.Password
-			server := proxy.Server
-			port := int(proxy.Port)
-			name := proxy.Name
-			query := url.Values{}
-
-			// 添加所有Clash配置中的参数
-			if proxy.Sni != "" {
-				query.Set("sni", proxy.Sni)
-			}
-
-			// 处理Peer参数，通常与SNI相同
-			if proxy.Peer != "" {
-				query.Set("peer", proxy.Peer)
-			}
-
-			// 处理跳过证书验证
-			if proxy.Skip_cert_verify {
-				query.Set("allowInsecure", "1")
-			}
-
-			// 处理网络类型
-			if proxy.Network != "" {
-				query.Set("type", proxy.Network)
-			}
-
-			// 处理客户端指纹
-			if proxy.Client_fingerprint != "" {
-				query.Set("fp", proxy.Client_fingerprint)
-			}
-
-			// 处理ALPN
-			if len(proxy.Alpn) > 0 {
-				query.Set("alpn", strings.Join(proxy.Alpn, ","))
-			}
-
-			// 处理Flow
-			if proxy.Flow != "" {
-				query.Set("flow", proxy.Flow)
-			}
-
-			// 处理WebSocket选项
-			if len(proxy.Ws_opts) > 0 {
-				if path, ok := proxy.Ws_opts["path"].(string); ok && path != "" {
-					query.Set("path", path)
-				}
-
-				if headers, ok := proxy.Ws_opts["headers"].(map[string]interface{}); ok {
-					if host, ok := headers["Host"].(string); ok && host != "" {
-						query.Set("host", host)
-					}
-				}
-			}
-
-			// 处理Reality选项
-			if len(proxy.Reality_opts) > 0 {
-				if publicKey, ok := proxy.Reality_opts["public-key"].(string); ok && publicKey != "" {
-					query.Set("pbk", publicKey)
-				}
-
-				if shortId, ok := proxy.Reality_opts["short-id"].(string); ok && shortId != "" {
-					query.Set("sid", shortId)
-				}
-			}
-
-			// 构建最终URL
-			queryStr := query.Encode()
-			if queryStr != "" {
-				link = fmt.Sprintf("trojan://%s@%s:%d?%s#%s", password, server, port, queryStr, name)
-			} else {
-				link = fmt.Sprintf("trojan://%s@%s:%d#%s", password, server, port, name)
-			}
-
-		case "vmess":
-			// vmess://base64(json)
-			vmessObj := map[string]interface{}{
-				"v":    "2",
-				"ps":   proxy.Name,
-				"add":  proxy.Server,
-				"port": proxy.Port,
-				"id":   proxy.Uuid,
-				"scy":  proxy.Cipher,
-			}
-			if proxy.AlterId != "" {
-				aid, _ := strconv.Atoi(proxy.AlterId)
-				vmessObj["aid"] = aid
-			} else {
-				vmessObj["aid"] = 0
-			}
-			vmessObj["net"] = proxy.Network
-			if proxy.Tls {
-				vmessObj["tls"] = "tls"
-			} else {
-				vmessObj["tls"] = "none"
-			}
-			if len(proxy.Ws_opts) > 0 {
-				if path, ok := proxy.Ws_opts["path"].(string); ok {
-					vmessObj["path"] = path
-				}
-				if headers, ok := proxy.Ws_opts["headers"].(map[string]interface{}); ok {
-					if host, ok := headers["Host"].(string); ok {
-						vmessObj["host"] = host
-					}
-				}
-			}
-			jsonData, _ := json.Marshal(vmessObj)
-			link = fmt.Sprintf("vmess://%s", base64.StdEncoding.EncodeToString(jsonData))
-
-		case "vless":
-			// vless://uuid@server:port?参数#name
-			uuid := proxy.Uuid
-			server := proxy.Server
-			port := int(proxy.Port)
-			name := proxy.Name
-			query := url.Values{}
-
-			// 处理网络类型
-			if proxy.Network != "" {
-				query.Set("type", proxy.Network)
-			}
-
-			// 处理TLS设置
-			if proxy.Tls {
-				query.Set("security", "tls")
-			} else {
-				query.Set("security", "none")
-			}
-
-			// 处理SNI设置(servername)
-			if proxy.Servername != "" {
-				query.Set("sni", proxy.Servername)
-			}
-
-			// 处理客户端指纹
-			if proxy.Client_fingerprint != "" {
-				query.Set("fp", proxy.Client_fingerprint)
-			}
-
-			// 处理Flow控制
-			if proxy.Flow != "" {
-				query.Set("flow", proxy.Flow)
-			}
-
-			// 处理跳过证书验证
-			if proxy.Skip_cert_verify {
-				query.Set("allowInsecure", "1")
-			}
-
-			// 处理ALPN
-			if len(proxy.Alpn) > 0 {
-				query.Set("alpn", strings.Join(proxy.Alpn, ","))
-			}
-
-			// 处理WebSocket选项
-			if len(proxy.Ws_opts) > 0 {
-				if path, ok := proxy.Ws_opts["path"].(string); ok && path != "" {
-					query.Set("path", path)
-				}
-				if headers, ok := proxy.Ws_opts["headers"].(map[string]interface{}); ok {
-					if host, ok := headers["Host"].(string); ok && host != "" {
-						query.Set("host", host)
-					}
-				}
-			}
-
-			// 处理Reality选项
-			if len(proxy.Reality_opts) > 0 {
-				if pbk, ok := proxy.Reality_opts["public-key"].(string); ok && pbk != "" {
-					query.Set("pbk", pbk)
-				}
-				if sid, ok := proxy.Reality_opts["short-id"].(string); ok && sid != "" {
-					query.Set("sid", sid)
-				}
-			}
-
-			// 处理GRPC选项
-			if len(proxy.Grpc_opts) > 0 {
-				query.Set("security", "reality")
-				if sn, ok := proxy.Grpc_opts["grpc-service-name"].(string); ok && sn != "" {
-					query.Set("serviceName", sn)
-				}
-				if mode, ok := proxy.Grpc_opts["grpc-mode"].(string); ok && mode == "multi" {
-					query.Set("mode", "multi")
-				}
-			}
-
-			// 构建最终URL
-			queryStr := query.Encode()
-			if queryStr != "" {
-				link = fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuid, server, port, queryStr, name)
-			} else {
-				link = fmt.Sprintf("vless://%s@%s:%d#%s", uuid, server, port, name)
-			}
-
-		case "hysteria":
-			// hysteria://server:port?protocol=udp&auth=auth&peer=peer&insecure=1&upmbps=up&downmbps=down&alpn=alpn#name
-			server := proxy.Server
-			port := int(proxy.Port)
-			name := proxy.Name
-			query := url.Values{}
-			query.Set("protocol", "udp")
-			if proxy.Auth_str != "" {
-				query.Set("auth", proxy.Auth_str)
-			}
-			if proxy.Peer != "" {
-				query.Set("peer", proxy.Peer)
-			}
-			if proxy.Skip_cert_verify {
-				query.Set("insecure", "1")
-			}
-			if proxy.Up > 0 {
-				query.Set("upmbps", strconv.Itoa(proxy.Up))
-			}
-			if proxy.Down > 0 {
-				query.Set("downmbps", strconv.Itoa(proxy.Down))
-			}
-			if len(proxy.Alpn) > 0 {
-				query.Set("alpn", strings.Join(proxy.Alpn, ","))
-			}
-			link = fmt.Sprintf("hysteria://%s:%d?%s#%s", server, port, query.Encode(), name)
-
-		case "hysteria2":
-			// hysteria2://auth@server:port?sni=sni&insecure=1&obfs=obfs&obfs-password=obfs-password&mport=ports&upmbps=up&downmbps=down&fp=fingerprint#name
-			server := proxy.Server
-			port := int(proxy.Port)
-			auth := proxy.Password
-			name := proxy.Name
-			query := url.Values{}
-			// SNI: 优先使用 Sni，如果为空则使用 Servername
-			if proxy.Sni != "" {
-				query.Set("sni", proxy.Sni)
-			} else if proxy.Servername != "" {
-				query.Set("sni", proxy.Servername)
-			}
-			// 跳过证书验证
-			if proxy.Skip_cert_verify {
-				query.Set("insecure", "1")
-			}
-			// 混淆
-			if proxy.Obfs != "" {
-				query.Set("obfs", proxy.Obfs)
-			}
-			if proxy.Obfs_password != "" {
-				query.Set("obfs-password", proxy.Obfs_password)
-			}
-			// ALPN
-			if len(proxy.Alpn) > 0 {
-				query.Set("alpn", strings.Join(proxy.Alpn, ","))
-			}
-			// 端口跳跃 (ports -> mport)
-			if proxy.Ports != "" {
-				query.Set("mport", proxy.Ports)
-			}
-			// 上行带宽
-			if proxy.Up > 0 {
-				query.Set("upmbps", strconv.Itoa(proxy.Up))
-			}
-			// 下行带宽
-			if proxy.Down > 0 {
-				query.Set("downmbps", strconv.Itoa(proxy.Down))
-			}
-			// 客户端指纹
-			if proxy.Client_fingerprint != "" {
-				query.Set("fp", proxy.Client_fingerprint)
-			}
-			link = fmt.Sprintf("hysteria2://%s@%s:%d?%s#%s", auth, server, port, query.Encode(), name)
-
-		case "tuic":
-			// tuic://uuid:password@server:port?sni=sni&congestion_control=congestion_control&alpn=alpn#name
-			uuid := proxy.Uuid
-			password := proxy.Password
-			server := proxy.Server
-			port := int(proxy.Port)
-			name := proxy.Name
-			query := url.Values{}
-			if proxy.Sni != "" {
-				query.Set("sni", proxy.Sni)
-			}
-			if proxy.Congestion_control != "" {
-				query.Set("congestion_control", proxy.Congestion_control)
-			}
-			if len(proxy.Alpn) > 0 {
-				query.Set("alpn", strings.Join(proxy.Alpn, ","))
-			}
-			if proxy.Udp_relay_mode != "" {
-				query.Set("udp_relay_mode", proxy.Udp_relay_mode)
-			}
-			if proxy.Disable_sni {
-				query.Set("disable_sni", "1")
-			}
-			link = fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuid, password, server, port, query.Encode(), name)
-
-		case "anytls":
-			// anytls://password@server:port?sni=sni&insecure=1&fp=chrome#anytls_name
-
-			password := proxy.Password
-			server := proxy.Server
-			port := int(proxy.Port)
-			name := proxy.Name
-			query := url.Values{}
-			if proxy.Sni != "" {
-				query.Set("sni", proxy.Sni)
-			}
-			if proxy.Skip_cert_verify {
-				query.Set("insecure", "1")
-			}
-			if proxy.Client_fingerprint != "" {
-				query.Set("fp", proxy.Client_fingerprint)
-			}
-
-			link = fmt.Sprintf("anytls://%s@%s:%d?%s#%s", password, server, port, query.Encode(), name)
-
-		case "socks5":
-			// socks5://username:password@server:port#name
-			username := proxy.Username
-			password := proxy.Password
-			server := proxy.Server
-			port := int(proxy.Port)
-			name := proxy.Name
-			if username != "" && password != "" {
-				link = fmt.Sprintf("socks5://%s:%s@%s:%d#%s", username, password, server, port, name)
-			} else {
-				link = fmt.Sprintf("socks5://%s:%d#%s", server, port, name)
-			}
-
+		// 使用公共函数生成节点链接
+		link := generateProxyLink(proxy)
+		if link == "" {
+			utils.Warn("节点【%s】生成链接失败，跳过", proxy.Name)
+			continue
 		}
+
 		Node.Link = link
 		Node.Name = proxy.Name
 		Node.LinkName = proxy.Name
@@ -923,4 +592,530 @@ func formatDurationSub(d time.Duration) string {
 		return fmt.Sprintf("%.0f分%.0f秒", d.Minutes(), math.Mod(d.Seconds(), 60))
 	}
 	return fmt.Sprintf("%.0f时%.0f分", d.Hours(), math.Mod(d.Minutes(), 60))
+}
+
+// applyAirportNodeFilter 应用机场节点过滤规则
+// 根据机场配置的白名单/黑名单规则过滤代理节点
+func applyAirportNodeFilter(airport *models.Airport, proxys []protocol.Proxy) []protocol.Proxy {
+	if airport == nil {
+		return proxys
+	}
+
+	hasNameWhitelist := utils.HasActiveNodeNameFilter(airport.NodeNameWhitelist)
+	hasNameBlacklist := utils.HasActiveNodeNameFilter(airport.NodeNameBlacklist)
+	hasProtocolWhitelist := airport.ProtocolWhitelist != ""
+	hasProtocolBlacklist := airport.ProtocolBlacklist != ""
+
+	// 如果没有任何过滤规则，直接返回
+	if !hasNameWhitelist && !hasNameBlacklist && !hasProtocolWhitelist && !hasProtocolBlacklist {
+		return proxys
+	}
+
+	// 解析协议白名单和黑名单
+	protocolWhitelistMap := make(map[string]bool)
+	protocolBlacklistMap := make(map[string]bool)
+
+	if hasProtocolWhitelist {
+		for _, p := range strings.Split(airport.ProtocolWhitelist, ",") {
+			p = strings.TrimSpace(strings.ToLower(p))
+			if p != "" {
+				protocolWhitelistMap[p] = true
+			}
+		}
+	}
+
+	if hasProtocolBlacklist {
+		for _, p := range strings.Split(airport.ProtocolBlacklist, ",") {
+			p = strings.TrimSpace(strings.ToLower(p))
+			if p != "" {
+				protocolBlacklistMap[p] = true
+			}
+		}
+	}
+
+	// 过滤节点
+	result := make([]protocol.Proxy, 0, len(proxys))
+	for _, proxy := range proxys {
+		nodeName := strings.TrimSpace(proxy.Name)
+		nodeProto := strings.ToLower(proxy.Type)
+
+		// 1. 名称黑名单检查（优先级最高）
+		if hasNameBlacklist && utils.MatchesNodeNameFilter(airport.NodeNameBlacklist, nodeName) {
+			continue
+		}
+
+		// 2. 名称白名单检查
+		if hasNameWhitelist && !utils.MatchesNodeNameFilter(airport.NodeNameWhitelist, nodeName) {
+			continue
+		}
+
+		// 3. 协议黑名单检查
+		if len(protocolBlacklistMap) > 0 && protocolBlacklistMap[nodeProto] {
+			continue
+		}
+
+		// 4. 协议白名单检查
+		if len(protocolWhitelistMap) > 0 && !protocolWhitelistMap[nodeProto] {
+			continue
+		}
+
+		result = append(result, proxy)
+	}
+
+	return result
+}
+
+// applyAirportNodeRename 应用机场节点重命名规则
+// 根据机场配置的预处理规则对节点名称进行替换
+func applyAirportNodeRename(airport *models.Airport, proxys []protocol.Proxy) []protocol.Proxy {
+	if airport == nil || airport.NodeNamePreprocess == "" {
+		return proxys
+	}
+
+	// 应用预处理规则到每个节点
+	for i := range proxys {
+		originalName := proxys[i].Name
+		processedName := utils.PreprocessNodeName(airport.NodeNamePreprocess, originalName)
+		if processedName != originalName {
+			proxys[i].Name = processedName
+		}
+	}
+
+	return proxys
+}
+
+// applyAirportDeduplication 应用机场高级去重规则
+// 根据机场配置的去重规则对代理节点进行去重
+func applyAirportDeduplication(airport *models.Airport, proxys []protocol.Proxy) []protocol.Proxy {
+	if airport == nil || airport.DeduplicationRule == "" {
+		return proxys
+	}
+
+	// 解析去重配置
+	var config models.DeduplicationConfig
+	if err := json.Unmarshal([]byte(airport.DeduplicationRule), &config); err != nil {
+		utils.Warn("解析机场去重规则失败: %v", err)
+		return proxys
+	}
+
+	// 只有 protocol 模式才进行高级去重
+	if config.Mode != "protocol" || len(config.ProtocolRules) == 0 {
+		return proxys
+	}
+
+	// 按协议字段去重
+	seen := make(map[string]bool)
+	var result []protocol.Proxy
+
+	for _, proxy := range proxys {
+		protoType := strings.ToLower(proxy.Type)
+		fields, exists := config.ProtocolRules[protoType]
+		if !exists || len(fields) == 0 {
+			// 该协议未配置去重规则，保留节点
+			result = append(result, proxy)
+			continue
+		}
+
+		// 生成去重Key（需传入协议类型用于解析）
+		key := generateProxyDeduplicationKey(proxy, protoType, fields)
+		if key == "" {
+			result = append(result, proxy)
+			continue
+		}
+
+		// 加上协议类型前缀，避免不同协议间Key冲突
+		fullKey := protoType + ":" + key
+		if !seen[fullKey] {
+			seen[fullKey] = true
+			result = append(result, proxy)
+		}
+	}
+
+	return result
+}
+
+// generateProxyDeduplicationKey 根据指定字段生成代理的去重Key
+// 需要先生成节点链接，再解析获取完整协议结构体，才能正确提取嵌套字段
+func generateProxyDeduplicationKey(proxy protocol.Proxy, protoType string, fields []string) string {
+	// 生成节点链接
+	link := generateProxyLink(proxy)
+	if link == "" {
+		return ""
+	}
+
+	// 解析链接获取完整协议结构体
+	protoObj, err := parseProtoFromLink(link, protoType)
+	if err != nil || protoObj == nil {
+		return ""
+	}
+
+	// 使用反射获取嵌套字段值
+	var parts []string
+	for _, field := range fields {
+		value := protocol.GetProtocolFieldValue(protoObj, field)
+		parts = append(parts, field+":"+value)
+	}
+	return strings.Join(parts, "|")
+}
+
+// generateProxyLink 从 Proxy 结构体生成节点链接
+func generateProxyLink(proxy protocol.Proxy) string {
+	proxy.Name = strings.TrimSpace(proxy.Name)
+	proxy.Server = utils.WrapIPv6Host(proxy.Server)
+
+	switch strings.ToLower(proxy.Type) {
+	case "ss":
+		method := proxy.Cipher
+		password := proxy.Password
+		server := proxy.Server
+		port := int(proxy.Port)
+		name := proxy.Name
+		encoded := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", method, password)))
+		return fmt.Sprintf("ss://%s@%s:%d#%s", encoded, server, port, name)
+
+	case "ssr":
+		server := proxy.Server
+		port := int(proxy.Port)
+		proxyProtocol := proxy.Protocol
+		method := proxy.Cipher
+		obfs := proxy.Obfs
+		password := base64.StdEncoding.EncodeToString([]byte(proxy.Password))
+		remarks := base64.StdEncoding.EncodeToString([]byte(proxy.Name))
+		obfsparam := ""
+		if proxy.Obfs_password != "" {
+			obfsparam = base64.StdEncoding.EncodeToString([]byte(proxy.Obfs_password))
+		}
+		params := fmt.Sprintf("remarks=%s", remarks)
+		if obfsparam != "" {
+			params += fmt.Sprintf("&obfsparam=%s", obfsparam)
+		}
+		data := fmt.Sprintf("%s:%d:%s:%s:%s:%s/?%s", server, port, proxyProtocol, method, obfs, password, params)
+		return fmt.Sprintf("ssr://%s", base64.StdEncoding.EncodeToString([]byte(data)))
+
+	case "trojan":
+		password := proxy.Password
+		server := proxy.Server
+		port := int(proxy.Port)
+		name := proxy.Name
+		query := url.Values{}
+		if proxy.Sni != "" {
+			query.Set("sni", proxy.Sni)
+		}
+		if proxy.Peer != "" {
+			query.Set("peer", proxy.Peer)
+		}
+		if proxy.Skip_cert_verify {
+			query.Set("allowInsecure", "1")
+		}
+		if proxy.Network != "" {
+			query.Set("type", proxy.Network)
+		}
+		if proxy.Client_fingerprint != "" {
+			query.Set("fp", proxy.Client_fingerprint)
+		}
+		if len(proxy.Alpn) > 0 {
+			query.Set("alpn", strings.Join(proxy.Alpn, ","))
+		}
+		if proxy.Flow != "" {
+			query.Set("flow", proxy.Flow)
+		}
+		if len(proxy.Ws_opts) > 0 {
+			if path, ok := proxy.Ws_opts["path"].(string); ok && path != "" {
+				query.Set("path", path)
+			}
+			if headers, ok := proxy.Ws_opts["headers"].(map[string]interface{}); ok {
+				if host, ok := headers["Host"].(string); ok && host != "" {
+					query.Set("host", host)
+				}
+			}
+		}
+		if len(proxy.Reality_opts) > 0 {
+			if publicKey, ok := proxy.Reality_opts["public-key"].(string); ok && publicKey != "" {
+				query.Set("pbk", publicKey)
+			}
+			if shortId, ok := proxy.Reality_opts["short-id"].(string); ok && shortId != "" {
+				query.Set("sid", shortId)
+			}
+		}
+		queryStr := query.Encode()
+		if queryStr != "" {
+			return fmt.Sprintf("trojan://%s@%s:%d?%s#%s", password, server, port, queryStr, name)
+		}
+		return fmt.Sprintf("trojan://%s@%s:%d#%s", password, server, port, name)
+
+	case "vmess":
+		vmessObj := map[string]interface{}{
+			"v":    "2",
+			"ps":   proxy.Name,
+			"add":  proxy.Server,
+			"port": proxy.Port,
+			"id":   proxy.Uuid,
+			"scy":  proxy.Cipher,
+		}
+		if proxy.AlterId != "" {
+			aid, _ := strconv.Atoi(proxy.AlterId)
+			vmessObj["aid"] = aid
+		} else {
+			vmessObj["aid"] = 0
+		}
+		vmessObj["net"] = proxy.Network
+		if proxy.Tls {
+			vmessObj["tls"] = "tls"
+		} else {
+			vmessObj["tls"] = "none"
+		}
+		if len(proxy.Ws_opts) > 0 {
+			if path, ok := proxy.Ws_opts["path"].(string); ok {
+				vmessObj["path"] = path
+			}
+			if headers, ok := proxy.Ws_opts["headers"].(map[string]interface{}); ok {
+				if host, ok := headers["Host"].(string); ok {
+					vmessObj["host"] = host
+				}
+			}
+		}
+		jsonData, _ := json.Marshal(vmessObj)
+		return fmt.Sprintf("vmess://%s", base64.StdEncoding.EncodeToString(jsonData))
+
+	case "vless":
+		uuid := proxy.Uuid
+		server := proxy.Server
+		port := int(proxy.Port)
+		name := proxy.Name
+		query := url.Values{}
+		if proxy.Network != "" {
+			query.Set("type", proxy.Network)
+		}
+		if proxy.Tls {
+			query.Set("security", "tls")
+		} else {
+			query.Set("security", "none")
+		}
+		if proxy.Servername != "" {
+			query.Set("sni", proxy.Servername)
+		}
+		if proxy.Client_fingerprint != "" {
+			query.Set("fp", proxy.Client_fingerprint)
+		}
+		if proxy.Flow != "" {
+			query.Set("flow", proxy.Flow)
+		}
+		if proxy.Skip_cert_verify {
+			query.Set("allowInsecure", "1")
+		}
+		if len(proxy.Alpn) > 0 {
+			query.Set("alpn", strings.Join(proxy.Alpn, ","))
+		}
+		if len(proxy.Ws_opts) > 0 {
+			if path, ok := proxy.Ws_opts["path"].(string); ok && path != "" {
+				query.Set("path", path)
+			}
+			if headers, ok := proxy.Ws_opts["headers"].(map[string]interface{}); ok {
+				if host, ok := headers["Host"].(string); ok && host != "" {
+					query.Set("host", host)
+				}
+			}
+		}
+		if len(proxy.Reality_opts) > 0 {
+			if pbk, ok := proxy.Reality_opts["public-key"].(string); ok && pbk != "" {
+				query.Set("pbk", pbk)
+			}
+			if sid, ok := proxy.Reality_opts["short-id"].(string); ok && sid != "" {
+				query.Set("sid", sid)
+			}
+		}
+		if len(proxy.Grpc_opts) > 0 {
+			query.Set("security", "reality")
+			if sn, ok := proxy.Grpc_opts["grpc-service-name"].(string); ok && sn != "" {
+				query.Set("serviceName", sn)
+			}
+			if mode, ok := proxy.Grpc_opts["grpc-mode"].(string); ok && mode == "multi" {
+				query.Set("mode", "multi")
+			}
+		}
+		queryStr := query.Encode()
+		if queryStr != "" {
+			return fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuid, server, port, queryStr, name)
+		}
+		return fmt.Sprintf("vless://%s@%s:%d#%s", uuid, server, port, name)
+
+	case "hysteria":
+		server := proxy.Server
+		port := int(proxy.Port)
+		name := proxy.Name
+		query := url.Values{}
+		query.Set("protocol", "udp")
+		if proxy.Auth_str != "" {
+			query.Set("auth", proxy.Auth_str)
+		}
+		if proxy.Peer != "" {
+			query.Set("peer", proxy.Peer)
+		}
+		if proxy.Skip_cert_verify {
+			query.Set("insecure", "1")
+		}
+		if proxy.Up > 0 {
+			query.Set("upmbps", strconv.Itoa(proxy.Up))
+		}
+		if proxy.Down > 0 {
+			query.Set("downmbps", strconv.Itoa(proxy.Down))
+		}
+		if len(proxy.Alpn) > 0 {
+			query.Set("alpn", strings.Join(proxy.Alpn, ","))
+		}
+		return fmt.Sprintf("hysteria://%s:%d?%s#%s", server, port, query.Encode(), name)
+
+	case "hysteria2":
+		server := proxy.Server
+		port := int(proxy.Port)
+		auth := proxy.Password
+		name := proxy.Name
+		query := url.Values{}
+		if proxy.Sni != "" {
+			query.Set("sni", proxy.Sni)
+		} else if proxy.Servername != "" {
+			query.Set("sni", proxy.Servername)
+		}
+		if proxy.Skip_cert_verify {
+			query.Set("insecure", "1")
+		}
+		if proxy.Obfs != "" {
+			query.Set("obfs", proxy.Obfs)
+		}
+		if proxy.Obfs_password != "" {
+			query.Set("obfs-password", proxy.Obfs_password)
+		}
+		if len(proxy.Alpn) > 0 {
+			query.Set("alpn", strings.Join(proxy.Alpn, ","))
+		}
+		if proxy.Ports != "" {
+			query.Set("mport", proxy.Ports)
+		}
+		if proxy.Up > 0 {
+			query.Set("upmbps", strconv.Itoa(proxy.Up))
+		}
+		if proxy.Down > 0 {
+			query.Set("downmbps", strconv.Itoa(proxy.Down))
+		}
+		if proxy.Client_fingerprint != "" {
+			query.Set("fp", proxy.Client_fingerprint)
+		}
+		return fmt.Sprintf("hysteria2://%s@%s:%d?%s#%s", auth, server, port, query.Encode(), name)
+
+	case "tuic":
+		uuid := proxy.Uuid
+		password := proxy.Password
+		server := proxy.Server
+		port := int(proxy.Port)
+		name := proxy.Name
+		query := url.Values{}
+		if proxy.Sni != "" {
+			query.Set("sni", proxy.Sni)
+		} else if proxy.Servername != "" {
+			query.Set("sni", proxy.Servername)
+		}
+		if proxy.Congestion_controller != "" {
+			query.Set("congestion_control", proxy.Congestion_controller)
+		}
+		if len(proxy.Alpn) > 0 {
+			query.Set("alpn", strings.Join(proxy.Alpn, ","))
+		}
+		if proxy.Udp_relay_mode != "" {
+			query.Set("udp_relay_mode", proxy.Udp_relay_mode)
+		}
+		if proxy.Disable_sni {
+			query.Set("disable_sni", "1")
+		}
+		// 处理TLS和客户端指纹
+		if proxy.Tls {
+			query.Set("security", "tls")
+		}
+		if proxy.Client_fingerprint != "" {
+			query.Set("fp", proxy.Client_fingerprint)
+		}
+		return fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuid, password, server, port, query.Encode(), name)
+
+	case "anytls":
+		password := proxy.Password
+		server := proxy.Server
+		port := int(proxy.Port)
+		name := proxy.Name
+		query := url.Values{}
+		if proxy.Sni != "" {
+			query.Set("sni", proxy.Sni)
+		}
+		if proxy.Skip_cert_verify {
+			query.Set("insecure", "1")
+		}
+		if proxy.Client_fingerprint != "" {
+			query.Set("fp", proxy.Client_fingerprint)
+		}
+		return fmt.Sprintf("anytls://%s@%s:%d?%s#%s", password, server, port, query.Encode(), name)
+
+	case "socks5":
+		username := proxy.Username
+		password := proxy.Password
+		server := proxy.Server
+		port := int(proxy.Port)
+		name := proxy.Name
+		if username != "" && password != "" {
+			return fmt.Sprintf("socks5://%s:%s@%s:%d#%s", username, password, server, port, name)
+		}
+		return fmt.Sprintf("socks5://%s:%d#%s", server, port, name)
+
+	default:
+		return ""
+	}
+}
+
+// applyAirportNodeUniquify 应用机场节点名称唯一化
+// 在节点名称前添加机场标识前缀，防止多机场间节点名称重复
+// 同一机场同一节点每次生成的名字保持一致（使用机场ID生成稳定前缀）
+func applyAirportNodeUniquify(airport *models.Airport, proxys []protocol.Proxy) []protocol.Proxy {
+	if airport == nil || !airport.NodeNameUniquify {
+		return proxys
+	}
+
+	// 生成前缀: 使用用户自定义前缀 或 默认的 [A{id}] 格式
+	var prefix string
+	if airport.NodeNamePrefix != "" {
+		prefix = airport.NodeNamePrefix
+	} else {
+		prefix = fmt.Sprintf("[A%d]", airport.ID)
+	}
+
+	// 为每个节点名称添加前缀
+	for i := range proxys {
+		proxys[i].Name = prefix + proxys[i].Name
+	}
+
+	return proxys
+}
+
+// parseProtoFromLink 根据协议类型解析链接获取结构体
+func parseProtoFromLink(link string, protoType string) (interface{}, error) {
+	switch protoType {
+	case "vmess":
+		return protocol.DecodeVMESSURL(link)
+	case "vless":
+		return protocol.DecodeVLESSURL(link)
+	case "trojan":
+		return protocol.DecodeTrojanURL(link)
+	case "ss":
+		return protocol.DecodeSSURL(link)
+	case "ssr":
+		return protocol.DecodeSSRURL(link)
+	case "hysteria":
+		return protocol.DecodeHYURL(link)
+	case "hysteria2":
+		return protocol.DecodeHY2URL(link)
+	case "tuic":
+		return protocol.DecodeTuicURL(link)
+	case "anytls":
+		return protocol.DecodeAnyTLSURL(link)
+	case "socks5":
+		return protocol.DecodeSocks5URL(link)
+	default:
+		return nil, fmt.Errorf("unsupported protocol: %s", protoType)
+	}
 }

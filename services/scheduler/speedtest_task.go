@@ -256,18 +256,23 @@ func RunSpeedTestWithConfig(nodes []models.Node, trigger models.TaskTrigger, pro
 
 			// TCP模式下收集结果（稍后批量写入）
 			if speedTestMode == "tcp" {
+				preserveSpeed := config.PreserveSpeedResult
 				if err != nil {
 					failCount++
 					utils.Debug("节点 [%s] 延迟测试失败: %v", n.Name, err)
-					n.Speed = -1
-					n.SpeedStatus = constants.StatusUntested // TCP模式不测速度
+					if !preserveSpeed {
+						n.Speed = -1
+						n.SpeedStatus = constants.StatusUntested // TCP模式不测速度
+					}
 					n.DelayTime = -1
 					n.DelayStatus = constants.StatusTimeout
 				} else {
 					successCount++
 					utils.Debug("节点 [%s] 延迟测试成功: %d ms", n.Name, latency)
-					n.Speed = 0 // TCP模式不测速度
-					n.SpeedStatus = constants.StatusUntested
+					if !preserveSpeed {
+						n.Speed = 0 // TCP模式不测速度
+						n.SpeedStatus = constants.StatusUntested
+					}
 					n.DelayTime = latency
 					n.DelayStatus = constants.StatusSuccess
 
@@ -304,15 +309,16 @@ func RunSpeedTestWithConfig(nodes []models.Node, trigger models.TaskTrigger, pro
 				n.LatencyCheckAt = time.Now().Format("2006-01-02 15:04:05")
 				// 收集结果到批量更新列表（不再立即写数据库）
 				speedTestResults = append(speedTestResults, models.SpeedTestResult{
-					NodeID:         n.ID,
-					Speed:          n.Speed,
-					SpeedStatus:    n.SpeedStatus,
-					DelayTime:      n.DelayTime,
-					DelayStatus:    n.DelayStatus,
-					LatencyCheckAt: n.LatencyCheckAt,
-					SpeedCheckAt:   "",
-					LinkCountry:    n.LinkCountry,
-					LandingIP:      n.LandingIP,
+					NodeID:          n.ID,
+					Speed:           n.Speed,
+					SpeedStatus:     n.SpeedStatus,
+					DelayTime:       n.DelayTime,
+					DelayStatus:     n.DelayStatus,
+					LatencyCheckAt:  n.LatencyCheckAt,
+					SpeedCheckAt:    "",
+					LinkCountry:     n.LinkCountry,
+					LandingIP:       n.LandingIP,
+					SkipSpeedFields: preserveSpeed, // 标记是否跳过速度字段更新
 				})
 			}
 
@@ -730,8 +736,9 @@ applyTags:
 // ExecuteNodeCheckWithProfile 使用指定策略执行节点检测
 // profileID: 策略ID
 // nodeIDs: 指定节点ID列表（可选，为空则按策略范围执行）
-func ExecuteNodeCheckWithProfile(profileID int, nodeIDs []int) {
-	utils.Info("开始执行节点检测，策略ID: %d", profileID)
+// trigger: 触发类型（手动/定时）
+func ExecuteNodeCheckWithProfile(profileID int, nodeIDs []int, trigger models.TaskTrigger) {
+	utils.Info("开始执行节点检测，策略ID: %d, 触发类型: %s", profileID, trigger)
 
 	// 获取策略配置
 	profile, err := models.GetNodeCheckProfileByID(profileID)
@@ -789,13 +796,6 @@ func ExecuteNodeCheckWithProfile(profileID int, nodeIDs []int) {
 
 	// 从策略构建独立的配置对象（并发安全，完全避免全局状态共享）
 	config := SpeedTestConfigFromProfile(profile)
-
-	// 确定触发类型
-	trigger := models.TaskTriggerManual
-	if len(nodeIDs) == 0 {
-		// 定时任务触发
-		trigger = models.TaskTriggerScheduled
-	}
 
 	// 执行检测（使用策略名称作为任务名，传递独立配置）
 	RunSpeedTestWithConfig(nodes, trigger, profile.Name, config)

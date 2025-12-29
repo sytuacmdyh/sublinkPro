@@ -41,10 +41,10 @@ import SecurityIcon from '@mui/icons-material/Security';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 
 import NodeRenameBuilder from './NodeRenameBuilder';
-import NodeNamePreprocessor from './NodeNamePreprocessor';
-import NodeNameFilter from './NodeNameFilter';
+import NodeNamePreprocessor from 'components/NodeNamePreprocessor';
+import NodeNameFilter from 'components/NodeNameFilter';
 import NodeTagFilter from './NodeTagFilter';
-import NodeProtocolFilter from './NodeProtocolFilter';
+import NodeProtocolFilter from 'components/NodeProtocolFilter';
 import NodeTransferBox from './NodeTransferBox';
 import DeduplicationConfig from './DeduplicationConfig';
 import FilterAltIcon from '@mui/icons-material/FilterAlt';
@@ -67,7 +67,9 @@ const formatCountry = (linkCountry) => {
 // 预览节点名称
 const previewNodeName = (rule) => {
   if (!rule) return '';
-  return rule
+  // 处理 $TagGroup(xxx) 格式
+  let result = rule.replace(/\$TagGroup\([^)]+\)/g, '速度优秀');
+  return result
     .replace(/\$Name/g, '香港节点-备注')
     .replace(/\$Flag/g, '🇭🇰')
     .replace(/\$LinkName/g, '香港01')
@@ -78,8 +80,7 @@ const previewNodeName = (rule) => {
     .replace(/\$Source/g, '机场A')
     .replace(/\$Index/g, '1')
     .replace(/\$Protocol/g, 'VMess')
-    .replace(/\$Tags/g, '速度优秀|香港节点')
-    .replace(/\$Tag/g, '速度优秀');
+    .replace(/\$Tags/g, '速度优秀|香港节点');
 };
 
 /**
@@ -714,7 +715,7 @@ export default function SubscriptionFormDialog({
                           <br />• <code>$Delay</code> - 延迟 &nbsp;&nbsp; • <code>$Group</code> - 分组名称
                           <br />• <code>$Source</code> - 来源 &nbsp;&nbsp; • <code>$Index</code> - 序号 &nbsp;&nbsp; •{' '}
                           <code>$Protocol</code> - 协议类型
-                          <br />• <code>$Tags</code> - 所有标签(逗号分隔) &nbsp;&nbsp; • <code>$Tag</code> - 第一个标签
+                          <br />• <code>$Tags</code> - 所有标签(竖线分隔) &nbsp;&nbsp; • <code>$TagGroup(组名)</code> - 指定标签组中的标签
                         </Typography>
                       </Box>
                       {formData.nodeNameRule && (

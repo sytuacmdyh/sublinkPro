@@ -782,6 +782,59 @@ DIRECT = direct
 		utils.Error("执行迁移 0019_fill_empty_node_protocol 失败: %v", err)
 	}
 
+	// 0021_recalculate_node_content_hash - 重新计算所有节点的 ContentHash（修复之前版本的计算问题）
+	if err := database.RunCustomMigration("0021_recalculate_node_content_hash", func() error {
+		// 获取所有节点
+		var nodes []struct {
+			ID   int
+			Link string
+		}
+		if err := db.Model(&Node{}).
+			Select("id", "link").
+			Find(&nodes).Error; err != nil {
+			return fmt.Errorf("查询节点失败: %w", err)
+		}
+
+		if len(nodes) == 0 {
+			utils.Info("没有需要重新计算 ContentHash 的节点")
+			return nil
+		}
+
+		utils.Info("开始重新计算 %d 个节点的 ContentHash...", len(nodes))
+
+		updateCount := 0
+		errorCount := 0
+
+		for _, node := range nodes {
+			// 解析链接获取 Proxy
+			proxy, err := protocol.LinkToProxy(protocol.Urls{Url: node.Link}, protocol.OutputConfig{})
+			if err != nil {
+				errorCount++
+				continue
+			}
+
+			// 生成 ContentHash
+			contentHash := protocol.GenerateProxyContentHash(proxy)
+			if contentHash == "" {
+				errorCount++
+				continue
+			}
+
+			// 更新数据库
+			if err := db.Model(&Node{}).Where("id = ?", node.ID).Update("content_hash", contentHash).Error; err != nil {
+				utils.Warn("更新节点 ID=%d 的 ContentHash 失败: %v", node.ID, err)
+				errorCount++
+				continue
+			}
+			updateCount++
+		}
+
+		utils.Info("ContentHash 重新计算完成：成功更新 %d 个，%d 个错误", updateCount, errorCount)
+		return nil
+	}); err != nil {
+		utils.Error("执行迁移 0021_recalculate_node_content_hash 失败: %v", err)
+	}
+
 	// 初始化用户数据
 	err := db.First(&User{}).Error
 	if err == gorm.ErrRecordNotFound {

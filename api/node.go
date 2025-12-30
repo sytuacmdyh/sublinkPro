@@ -7,7 +7,6 @@ import (
 	"sublink/models"
 	"sublink/node/protocol"
 	"sublink/utils"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -35,6 +34,16 @@ func NodeUpdadte(c *gin.Context) {
 	Node.Name = name
 
 	//更新构造节点元数据
+	// 检测是否为 WireGuard 配置文件格式，如果是则转换为 URL 格式
+	if protocol.IsWireGuardConfig(link) {
+		wg, err := protocol.ParseWireGuardConfig(link)
+		if err != nil {
+			utils.FailWithMsg(c, "WireGuard 配置文件解析失败: "+err.Error())
+			return
+		}
+		// 转换为 URL 格式
+		link = protocol.EncodeWireGuardURL(wg)
+	}
 	u, err := url.Parse(link)
 	if err != nil {
 		utils.Error("解析节点链接失败: %v", err)
@@ -160,12 +169,49 @@ func NodeUpdadte(c *gin.Context) {
 		Node.LinkAddress = socks5.Server + ":" + utils.GetPortString(socks5.Port)
 		Node.LinkHost = socks5.Server
 		Node.LinkPort = utils.GetPortString(socks5.Port)
+	case u.Scheme == "wg" || u.Scheme == "wireguard":
+		wg, err := protocol.DecodeWireGuardURL(link)
+		if err != nil {
+			utils.Error("解析节点链接失败: %v", err)
+			return
+		}
+		if Node.Name == "" {
+			Node.Name = wg.Name
+		}
+		Node.LinkName = wg.Name
+		Node.LinkAddress = wg.Server + ":" + utils.GetPortString(wg.Port)
+		Node.LinkHost = wg.Server
+		Node.LinkPort = utils.GetPortString(wg.Port)
 	}
 
 	Node.Link = link
 	Node.DialerProxyName = dialerProxyName
 	Node.Group = group
 	Node.Protocol = protocol.GetProtocolFromLink(link)
+
+	// 重新计算 ContentHash
+	proxy, proxyErr := protocol.LinkToProxy(protocol.Urls{Url: link}, protocol.OutputConfig{})
+	if proxyErr == nil {
+		contentHash := protocol.GenerateProxyContentHash(proxy)
+		if contentHash != "" {
+			Node.ContentHash = contentHash
+			// 检查是否与其他节点重复（排除自身）
+			if existingNode, exists := models.GetNodeByContentHash(contentHash); exists && existingNode.ID != Node.ID {
+				// 构建详细的重复信息
+				source := existingNode.Source
+				if source == "" || source == "manual" {
+					source = "手动添加"
+				}
+				group := existingNode.Group
+				if group == "" {
+					group = "未分组"
+				}
+				utils.FailWithMsg(c, "节点内容已存在，与以下节点重复：[来源: "+source+"] [分组: "+group+"] [名称: "+existingNode.Name+"]")
+				return
+			}
+		}
+	}
+
 	err = Node.Update()
 	if err != nil {
 		utils.FailWithMsg(c, "更新失败")
@@ -336,8 +382,18 @@ func NodeAdd(c *gin.Context) {
 		utils.FailWithMsg(c, "link  不能为空")
 		return
 	}
+	// 检测是否为 WireGuard 配置文件格式，如果是则转换为 URL 格式
+	if protocol.IsWireGuardConfig(link) {
+		wg, err := protocol.ParseWireGuardConfig(link)
+		if err != nil {
+			utils.FailWithMsg(c, "WireGuard 配置文件解析失败: "+err.Error())
+			return
+		}
+		// 转换为 URL 格式
+		link = protocol.EncodeWireGuardURL(wg)
+	}
 	if !strings.Contains(link, "://") {
-		utils.FailWithMsg(c, "link 必须包含 ://")
+		utils.FailWithMsg(c, "link 必须包含 :// 或者是有效的 WireGuard 配置文件")
 		return
 	}
 	Node.Name = name
@@ -484,16 +540,49 @@ func NodeAdd(c *gin.Context) {
 		Node.LinkAddress = anytls.Server + ":" + utils.GetPortString(anytls.Port)
 		Node.LinkHost = anytls.Server
 		Node.LinkPort = utils.GetPortString(anytls.Port)
+	case u.Scheme == "wg" || u.Scheme == "wireguard":
+		wg, err := protocol.DecodeWireGuardURL(link)
+		if err != nil {
+			utils.Error("解析节点链接失败: %v", err)
+			return
+		}
+
+		if name == "" {
+			Node.Name = wg.Name
+		}
+		Node.LinkName = wg.Name
+		Node.LinkAddress = wg.Server + ":" + utils.GetPortString(wg.Port)
+		Node.LinkHost = wg.Server
+		Node.LinkPort = utils.GetPortString(wg.Port)
 	}
 	Node.Link = link
 	Node.DialerProxyName = dialerProxyName
 	Node.Group = group
 	Node.Protocol = protocol.GetProtocolFromLink(link)
-	err = Node.Find()
-	// 如果找到记录说明重复
-	if err == nil {
-		Node.Name = name + " " + time.Now().Format("2006-01-02 15:04:05")
+
+	// 生成 ContentHash（用于全库去重）
+	proxy, proxyErr := protocol.LinkToProxy(protocol.Urls{Url: link}, protocol.OutputConfig{})
+	if proxyErr == nil {
+		contentHash := protocol.GenerateProxyContentHash(proxy)
+		if contentHash != "" {
+			Node.ContentHash = contentHash
+			// 检查是否已存在相同内容的节点
+			if existingNode, exists := models.GetNodeByContentHash(contentHash); exists {
+				// 构建详细的重复信息
+				source := existingNode.Source
+				if source == "" || source == "manual" {
+					source = "手动添加"
+				}
+				group := existingNode.Group
+				if group == "" {
+					group = "未分组"
+				}
+				utils.FailWithMsg(c, "节点内容已存在，与以下节点重复：[来源: "+source+"] [分组: "+group+"] [名称: "+existingNode.Name+"]")
+				return
+			}
+		}
 	}
+
 	err = Node.Add()
 	if err != nil {
 		utils.FailWithMsg(c, "添加失败检查一下是否节点重复")

@@ -17,6 +17,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 // project imports
 import MainCard from 'ui-component/cards/MainCard';
 import Pagination from 'components/Pagination';
+import useConfig from 'hooks/useConfig';
 import {
   getSubscriptions,
   addSubscription,
@@ -51,6 +52,10 @@ import {
 export default function SubscriptionList() {
   const theme = useTheme();
   const matchDownMd = useMediaQuery(theme.breakpoints.down('md'));
+  const { isFeatureEnabled } = useConfig();
+
+  // 功能开关：预览功能只有启用 SubNodePreview 时才显示
+  const showPreview = isFeatureEnabled('SubNodePreview');
 
   const [subscriptions, setSubscriptions] = useState([]);
   const [allNodes, setAllNodes] = useState([]);
@@ -554,30 +559,12 @@ export default function SubscriptionList() {
   };
 
   // 预览已保存的订阅（从列表触发）
+  // 使用 SubscriptionID 让后端直接调用 GetSub 逻辑，确保预览与实际拉取结果一致
   const handlePreviewSubscription = async (sub) => {
     setPreviewLoading(true);
     try {
-      // 解析订阅配置
-      const nodes = sub.Nodes?.map((n) => n.Name) || [];
-      const groups = (sub.Groups || []).map((g) => (typeof g === 'string' ? g : g.Name));
-
       const previewRequest = {
-        Nodes: nodes,
-        Groups: groups,
-        Scripts: (sub.Scripts || []).map((s) => s.id),
-        DelayTime: sub.DelayTime || 0,
-        MinSpeed: sub.MinSpeed || 0,
-        CountryWhitelist: sub.CountryWhitelist || '',
-        CountryBlacklist: sub.CountryBlacklist || '',
-        TagWhitelist: sub.TagWhitelist || '',
-        TagBlacklist: sub.TagBlacklist || '',
-        ProtocolWhitelist: sub.ProtocolWhitelist || '',
-        ProtocolBlacklist: sub.ProtocolBlacklist || '',
-        NodeNameWhitelist: sub.NodeNameWhitelist || '',
-        NodeNameBlacklist: sub.NodeNameBlacklist || '',
-        NodeNamePreprocess: sub.NodeNamePreprocess || '',
-        NodeNameRule: sub.NodeNameRule || '',
-        DeduplicationRule: sub.DeduplicationRule || ''
+        SubscriptionID: sub.ID // 使用订阅ID，后端会调用 GetSub 获取完整节点列表
       };
 
       const response = await previewSubscriptionNodes(previewRequest);
@@ -781,9 +768,9 @@ export default function SubscriptionList() {
                 sx={
                   loading
                     ? {
-                        animation: 'spin 1s linear infinite',
-                        '@keyframes spin': { from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } }
-                      }
+                      animation: 'spin 1s linear infinite',
+                      '@keyframes spin': { from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } }
+                    }
                     : {}
                 }
               />
@@ -799,9 +786,9 @@ export default function SubscriptionList() {
               sx={
                 loading
                   ? {
-                      animation: 'spin 1s linear infinite',
-                      '@keyframes spin': { from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } }
-                    }
+                    animation: 'spin 1s linear infinite',
+                    '@keyframes spin': { from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } }
+                  }
                   : {}
               }
             />
@@ -826,6 +813,7 @@ export default function SubscriptionList() {
           onDelete={handleDelete}
           onCopy={handleCopy}
           onPreview={handlePreviewSubscription}
+          showPreview={showPreview}
           onChainProxy={handleChainProxy}
           onStartSort={handleStartSort}
           onConfirmSort={handleConfirmSort}
@@ -855,6 +843,7 @@ export default function SubscriptionList() {
           onDelete={handleDelete}
           onCopy={handleCopy}
           onPreview={handlePreviewSubscription}
+          showPreview={showPreview}
           onChainProxy={handleChainProxy}
           onStartSort={handleStartSort}
           onConfirmSort={handleConfirmSort}
@@ -930,6 +919,7 @@ export default function SubscriptionList() {
         onToggleAllAvailable={handleToggleAllAvailable}
         onToggleAllSelected={handleToggleAllSelected}
         onPreview={handlePreview}
+        showPreview={showPreview}
         previewLoading={previewLoading}
       />
 

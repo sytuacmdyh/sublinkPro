@@ -89,6 +89,9 @@ type Proxy struct {
 	Udp_relay_mode        string                 `yaml:"udp-relay-mode,omitempty"`        // UDP 转发模式 (Tuic)
 	Disable_sni           bool                   `yaml:"disable-sni,omitempty"`           // 禁用 SNI (Tuic)
 	Dialer_proxy          string                 `yaml:"dialer-proxy,omitempty"`          // 前置代理
+	// SS 插件字段
+	Plugin      string                 `yaml:"plugin,omitempty"`      // SS 插件名称
+	Plugin_opts map[string]interface{} `yaml:"plugin-opts,omitempty"` // SS 插件选项
 	// WireGuard 特有字段
 	Private_key string   `yaml:"private-key,omitempty"` // WireGuard 私钥
 	Public_key  string   `yaml:"public-key,omitempty"`  // WireGuard 公钥
@@ -144,6 +147,44 @@ func convertToInt(value interface{}) (int, error) {
 	}
 }
 
+// convertSSPluginOpts 将 SsPlugin 转换为 Clash 格式的 plugin-opts
+// 根据不同插件类型生成对应的配置
+func convertSSPluginOpts(plugin SsPlugin) map[string]interface{} {
+	if plugin.Name == "" {
+		return nil
+	}
+
+	opts := make(map[string]interface{})
+
+	// 从结构体字段读取值
+	if plugin.Mode != "" {
+		opts["mode"] = plugin.Mode
+	}
+	if plugin.Host != "" {
+		opts["host"] = plugin.Host
+	}
+	if plugin.Path != "" {
+		opts["path"] = plugin.Path
+	}
+	if plugin.Tls {
+		opts["tls"] = true
+	}
+	if plugin.Mux {
+		opts["mux"] = true
+	}
+	if plugin.Password != "" {
+		opts["password"] = plugin.Password
+	}
+	if plugin.Version > 0 {
+		opts["version"] = plugin.Version
+	}
+
+	if len(opts) == 0 {
+		return nil
+	}
+	return opts
+}
+
 // LinkToProxy 将单个节点链接转换为 Proxy 结构体
 // 支持 ss, ssr, trojan, vmess, vless, hysteria, hysteria2, tuic, anytls, socks5 等协议
 func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
@@ -158,7 +199,7 @@ func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
 		if ss.Name == "" {
 			ss.Name = fmt.Sprintf("%s:%s", ss.Server, utils.GetPortString(ss.Port))
 		}
-		return Proxy{
+		proxy := Proxy{
 			Name:             ss.Name,
 			Type:             "ss",
 			Server:           ss.Server,
@@ -168,7 +209,15 @@ func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
 			Udp:              config.Udp,
 			Skip_cert_verify: config.Cert,
 			Dialer_proxy:     link.DialerProxyName,
-		}, nil
+		}
+		// 处理 SS 插件
+		if ss.Plugin.Name != "" {
+			proxy.Plugin = ss.Plugin.Name
+			proxy.Plugin_opts = convertSSPluginOpts(ss.Plugin)
+		}
+
+		return proxy, nil
+
 	case Scheme == "ssr":
 		ssr, err := DecodeSSRURL(link.Url)
 		if err != nil {
@@ -208,6 +257,8 @@ func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
 			},
 		}
 		DeleteOpts(ws_opts)
+		// 跳过证书验证：订阅设置开启时强制应用，否则使用节点自身设置
+		skipCert := config.Cert || trojan.Query.AllowInsecure == 1
 		return Proxy{
 			Name:               trojan.Name,
 			Type:               "trojan",
@@ -221,7 +272,7 @@ func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
 			Alpn:               trojan.Query.Alpn,
 			Ws_opts:            ws_opts,
 			Udp:                config.Udp,
-			Skip_cert_verify:   config.Cert,
+			Skip_cert_verify:   skipCert,
 			Dialer_proxy:       link.DialerProxyName,
 		}, nil
 	case Scheme == "vmess":
@@ -297,6 +348,8 @@ func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
 		if vless.Query.Security == "none" {
 			tls = false
 		}
+		// 跳过证书验证：订阅设置开启时强制应用，否则使用节点自身设置
+		skipCert := config.Cert || vless.Query.AllowInsecure == 1
 		return Proxy{
 			Name:               vless.Name,
 			Type:               "vless",
@@ -312,7 +365,7 @@ func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
 			Reality_opts:       reality_opts,
 			Grpc_opts:          grpc_opts,
 			Udp:                config.Udp,
-			Skip_cert_verify:   config.Cert,
+			Skip_cert_verify:   skipCert,
 			Tls:                tls,
 			Dialer_proxy:       link.DialerProxyName,
 		}, nil
@@ -325,6 +378,8 @@ func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
 		if hy.Name == "" {
 			hy.Name = fmt.Sprintf("%s:%s", hy.Host, utils.GetPortString(hy.Port))
 		}
+		// 跳过证书验证：订阅设置开启时强制应用，否则使用节点自身设置
+		skipCert := config.Cert || hy.Insecure == 1
 		return Proxy{
 			Name:             hy.Name,
 			Type:             "hysteria",
@@ -335,8 +390,8 @@ func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
 			Down:             hy.DownMbps,
 			Alpn:             hy.ALPN,
 			Peer:             hy.Peer,
-			Udp:              config.Udp,
-			Skip_cert_verify: config.Cert,
+			Udp:              true, // Hysteria 基于 UDP/QUIC，默认启用 UDP
+			Skip_cert_verify: skipCert,
 			Dialer_proxy:     link.DialerProxyName,
 		}, nil
 	case Scheme == "hy2" || Scheme == "hysteria2":
@@ -348,6 +403,8 @@ func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
 		if hy2.Name == "" {
 			hy2.Name = fmt.Sprintf("%s:%s", hy2.Host, utils.GetPortString(hy2.Port))
 		}
+		// 跳过证书验证：订阅设置开启时强制应用，否则使用节点自身设置
+		skipCert := config.Cert || hy2.Insecure == 1
 		return Proxy{
 			Name:             hy2.Name,
 			Type:             "hysteria2",
@@ -362,8 +419,8 @@ func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
 			Obfs_password:    hy2.ObfsPassword,
 			Up:               hy2.UpMbps,
 			Down:             hy2.DownMbps,
-			Udp:              config.Udp,
-			Skip_cert_verify: config.Cert,
+			Udp:              true, // Hysteria2 基于 UDP/QUIC，默认启用 UDP
+			Skip_cert_verify: skipCert,
 			Dialer_proxy:     link.DialerProxyName,
 		}, nil
 	case Scheme == "tuic":
@@ -379,6 +436,8 @@ func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
 		if tuic.Disable_sni == 1 {
 			disable_sni = true
 		}
+		// 跳过证书验证：订阅设置开启时强制应用，否则使用节点自身设置
+		skipCert := config.Cert || tuic.Insecure == 1
 		return Proxy{
 			Name:                  tuic.Name,
 			Type:                  "tuic",
@@ -393,8 +452,8 @@ func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
 			Sni:                   tuic.Sni,
 			Tls:                   tuic.Tls,
 			Client_fingerprint:    tuic.ClientFingerprint,
-			Udp:                   config.Udp,
-			Skip_cert_verify:      config.Cert,
+			Udp:                   true, // TUIC 基于 UDP/QUIC，默认启用 UDP
+			Skip_cert_verify:      skipCert,
 			Dialer_proxy:          link.DialerProxyName,
 			Version:               tuic.Version,
 			Token:                 tuic.Token,
@@ -405,13 +464,15 @@ func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
 		if err != nil {
 			return Proxy{}, err
 		}
+		// 跳过证书验证：订阅设置开启时强制应用，否则使用节点自身设置
+		skipCert := config.Cert || anyTLS.SkipCertVerify
 		return Proxy{
 			Name:               anyTLS.Name,
 			Type:               "anytls",
 			Server:             anyTLS.Server,
 			Port:               FlexPort(utils.GetPortInt(anyTLS.Port)),
 			Password:           anyTLS.Password,
-			Skip_cert_verify:   anyTLS.SkipCertVerify,
+			Skip_cert_verify:   skipCert,
 			Sni:                anyTLS.SNI,
 			Client_fingerprint: anyTLS.ClientFingerprint,
 			Dialer_proxy:       link.DialerProxyName,
@@ -637,29 +698,23 @@ func DecodeClash(proxys []Proxy, yamlfile string, customGroups ...[]CustomProxyG
 			existingProxies, _ = proxyGroup["proxies"].([]interface{})
 		}
 
-		// 如果 existingProxies 不为空，则不追加节点
-		if len(existingProxies) > 0 {
-			continue
-		}
-
-		// 合并现有代理和新节点
-		var validProxies []interface{}
-		for _, p := range existingProxies {
-			if p != nil {
-				validProxies = append(validProxies, p)
+		// 关键逻辑：只有当 proxies 列表为空时才追加所有节点
+		// 如果已有 proxies（组引用如 🚀 节点选择、DIRECT 等），保持不变
+		// 这符合 ACL4SSR 的设计：只有使用 .* 的组才需要包含所有节点
+		if len(existingProxies) == 0 {
+			// 没有任何 proxies，追加所有节点
+			var validProxies []interface{}
+			for _, newProxy := range ProxiesNameList {
+				validProxies = append(validProxies, newProxy)
 			}
+			// 如果仍然为空，插入 DIRECT 作为后备
+			if len(validProxies) == 0 {
+				validProxies = append(validProxies, "DIRECT")
+			}
+			proxyGroup["proxies"] = validProxies
+			proxyGroups[i] = proxyGroup
 		}
-		for _, newProxy := range ProxiesNameList {
-			validProxies = append(validProxies, newProxy)
-		}
-
-		// 如果代理组为空，插入 DIRECT 作为后备
-		if len(validProxies) == 0 {
-			validProxies = append(validProxies, "DIRECT")
-		}
-
-		proxyGroup["proxies"] = validProxies
-		proxyGroups[i] = proxyGroup
+		// 已有 proxies 的组保持不变
 	}
 
 	// config["proxy-groups"] = proxyGroups
